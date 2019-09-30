@@ -1,0 +1,9 @@
+<launch>
+
+    <!-- Joy node - reads data from joystick and publishes joy commands -->
+    <node name="joystick" pkg="joy" type="joy_node"/>
+
+    <!-- Teleop control node - reads joy command, publishes Twist message -->
+    <node name="teleop_control" pkg="teleop_control" type="teleop_control.py"/>
+
+</launch>
