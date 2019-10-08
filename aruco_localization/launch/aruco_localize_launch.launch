@@ -1,0 +1,10 @@
+<launch>
+    <!-- aruco_detect -->
+    <include file="$(find aruco_detect)/launch/aruco_detect.launch" />
+
+    <!-- launch webcam -->
+    <include file="$(find aruco_localization)/launch/webcam_launch.launch" />
+
+    <node name="aruco_frame_transformer" pkg="aruco_localization" type="aruco_frame_transformer.py"> </node>
+
+</launch>
