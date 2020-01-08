@@ -15,7 +15,13 @@ Navigate back to the top directory of the `catkin_ws` and run `catkin_make`
 ```
 cd ~/catkin_ws
 catkin_make
+source ~/catkin_ws/devel/setup.bash
 ```
+
+## Usage
+To come, once launch files are written
+
+## Launch files
 
 ## Packages
 
@@ -26,4 +32,4 @@ Software for determining the location of a camera relative to an ArUco marker pl
 Allows the robot to be controlled using a joystick. This is used for testing purposes of the motor control code.
 
 ### uwb_localization
-Localization of the robot using the Decawave DWM1001 ultra-wide band modules. This is the method the robot is currently using for localization.
+Localization of the robot using the Decawave DWM1001 ultra-wide band modules. This is the method the robot is currently using for localization. This package depends on the [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface) package in the PaintJet organination.
