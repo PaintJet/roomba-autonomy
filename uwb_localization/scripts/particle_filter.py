@@ -4,13 +4,13 @@ from __future__ import print_function
 
 # ROS imports
 import rospy
-from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray
+from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Twist
 from std_msgs.msg import Float64
 
 
 from pfilter import ParticleFilter, independent_sample, squared_error, gaussian_noise
 import numpy as np
-from scipy.stats import uniform
+from scipy.stats import uniform, norm
 
 
 
@@ -19,9 +19,14 @@ class UWBParticleFilter:
     # Implementation of a particle filter to predict the pose of the robot given distance measurements from the modules
     # anchor_positions is the ground truth location of all of the anchors
     # tag_transforms is a 2d numpy array storing the [x,y] coordinates of each tag in the robot frame
-    def __init__(self, anchor_positions, tag_transforms):
+    def __init__(self, anchor_positions, tag_transforms, initial_position, update_rate):
         # Number of particles
-        self.n = 1000
+        self.n = 100
+
+        # Sensor covariance for range measurement of UWB modules
+        self.UWB_COVARIANCE = 1
+
+        self.update_rate = float(update_rate) #Hz
 
         # Members of the state
         self.state_desc = ["x", "y", "theta"]
@@ -29,9 +34,9 @@ class UWBParticleFilter:
         # Prior sampling function for each of the state variables
         # We assume uniform distribution over [0 m, 20 m]
         self.prior_fn = independent_sample([
-            uniform(loc = -50, scale = 50).rvs,
-            uniform(loc = -50, scale = 50).rvs,
-            uniform(loc =   0, scale = 2*np.pi)
+            norm(loc = initial_position[0], scale = 5).rvs,
+            norm(loc = initial_position[0], scale = 5).rvs,
+            uniform(loc =   0, scale = 2*np.pi).rvs
         ])
 
         self.num_anchors = anchor_positions.shape[0]
@@ -41,14 +46,37 @@ class UWBParticleFilter:
             n_particles = self.n,
             prior_fn = self.prior_fn,
             observe_fn = self.observation_function,
-            weight_fn = lambda x,y:squared_error(x, y, sigma=0.6),
-            noise_fn = lambda x: gaussian_noise(x, sigmas=[0.2, 0.2, 0.2])
+            weight_fn = self.weight_function,
+            dynamics_fn = self.dynamics_function,
+            noise_fn = lambda x: gaussian_noise(x, sigmas=[0.1, 0.1, 0.1])
         )
 
         self.num_tags = tag_transforms.shape[0]
         self.tag_transforms = tag_transforms
 
         self.pf.update()
+
+    # weight_function
+    # Accepts the hypothetical observations for each particle and real observations for all of the sensors and
+    # computes a weight for the particle
+    # hyp_observed - (nxh) matrix containing the hypothetical observation for each particle
+    # real_observed - (h,) vector containing the real observation
+    # returns a (n,) vector containing the weights for each of the particles
+    def weight_function(self, hyp_observed, real_observed):
+        # Create output vector of dimension (n,)
+        particle_weights = np.zeros(shape = (hyp_observed.shape[0],), dtype = np.float32)
+
+        # Assume the range measurements for the UWB modules has gaussian noise
+        # Iterate over each particle
+        for i in range(hyp_observed.shape[0]):
+            # Calculate the gaussian pdf for the difference between the real and expected sensor measurements for all unmasked elements in the array
+            # Since all of the sensor measurements are independent, we can simply multiply the 1-D probabilities
+            # We construct a gaussian with a mean of 0 and a variance empirically determined for the UWB modules
+            measurement_probabilities = norm(0, self.UWB_COVARIANCE).pdf(hyp_observed[i][~real_observed.mask[0]] - real_observed.data[0][~real_observed.mask[0]])
+            particle_weights[i] = np.prod(measurement_probabilities, axis = 0)
+        #print(particle_weights)
+        return particle_weights
+
 
     # observation_function
     # Accepts the state of all the particles and returns the predicted observation for each one
@@ -67,13 +95,72 @@ class UWBParticleFilter:
                     #print("{} {}".format(particle_states[i], self.anchor_positions[j]), end = "\n")
 
                     # Calculate expected position of the tag in the world frame
-                    x_tag = self.tag_transforms[j][0] * np.cos(particle_states[i][2]) - self.tag_transforms[j][1] * np.sin(particle_states[i][2]) + self.anchor_positions[j][0]
-                    y_tag = self.tag_transforms[j][0] * np.sin(particle_states[i][2]) + self.tag_transforms[j][1] * np.cos(particle_states[i][2]) + self.anchor_positions[j][1]
+                    x_tag = self.tag_transforms[j][0] * np.cos(particle_states[i][2]) - self.tag_transforms[j][1] * np.sin(particle_states[i][2]) + particle_states[i][0]
+                    y_tag = self.tag_transforms[j][0] * np.sin(particle_states[i][2]) + self.tag_transforms[j][1] * np.cos(particle_states[i][2]) + particle_states[i][1]
                     expected_tag_positon = np.array([x_tag, y_tag])
 
                     # Expected observation is the
-                    expected_observations[i][self.num_anchors * j + k] = np.linalg.norm(expected_tag_positon - self.anchor_positions[j])
+                    expected_observations[i][self.num_anchors * j + k] = np.linalg.norm(expected_tag_positon - self.anchor_positions[k])
         return expected_observations
+
+    # dynamics_function
+    # Accepts the state of all of the particles and returns the predicted state based on the control input to the robot
+    # Applies a dynamics model to evolve the particles
+    # Control input read from ROS topic cmd_vel
+    # Also applies noise proportional to the control input
+    # Arguments:
+    #   particles_states - (n,d) vector containing the state of all of the particles
+    #  returns predicted particle_states (n,d) vector with evolved particles
+    def dynamics_function(self, particle_states):
+        # Get current cmd_vel
+        cmd_vel = rospy.wait_for_message("/cmd_vel", Twist)
+
+        # Time step between updates
+        delta_t = 1/self.update_rate
+
+        # Calculate change in angle and arc length traversed
+        delta_theta = 17*cmd_vel.angular.z * delta_t
+        delta_s = 17*cmd_vel.linear.x * delta_t
+
+        #print("delta_x: {} \t delta_y: {} \t delta_theta: {}".format(delta_x, delta_y, delta_theta))
+
+
+        # Init variables to store translation in x and y directions in the robot frame
+        # delta_y is the forward direction of the robot
+        # delta_x is the right direction of the robot
+        # NOTE: This coordinate frame does not coincide with the ROS coordinate frame of the robot
+        # ROS coordinate frame is rotated 90 degrees counter-clockwise
+        delta_x_robot = 0.0
+        delta_y_robot = 0.0
+
+        # This is a singularity where the robot only moves forward
+        # Radius of circle is infinite
+        if delta_theta == 0:
+            delta_y_robot = delta_s
+        else:
+            # Radius of the circle along which the robot is travelling
+            r = delta_s/delta_theta
+
+            # Next, calculate the translation in the robot frame
+            delta_x_robot = r*(np.cos(delta_theta) - 1)
+            delta_y_robot = r*np.sin(delta_theta)
+
+        for i in range(particle_states.shape[0]):
+
+            # Transform x and y translation in robot frame to world coordinate frame
+            delta_x = delta_x_robot*np.cos(particle_states[i][2]) - delta_y_robot*np.sin(particle_states[i][2])
+            delta_y = delta_x_robot*np.sin(particle_states[i][2]) + delta_y_robot*np.cos(particle_states[i][2])
+
+            particle_states[i][0] = particle_states[i][0] + delta_x_robot
+            particle_states[i][1] = particle_states[i][1] + delta_y_robot
+            particle_states[i][2] = particle_states[i][2] + delta_theta
+
+            if(i == 0):
+                print("delta_x: {} \t delta_y: {} \t delta_theta: {}".format(delta_x_robot, delta_y_robot, delta_theta))
+
+
+        # Return updated particles
+        return particle_states
 
     # update
     # Takes in the observation from the sensors and calls an update step on the particle filter
@@ -122,6 +209,10 @@ if __name__ == "__main__":
     LOG_DATA = True
     log_path = "uwb-data.csv"
 
+    # Rate to update particle filter
+    # TODO determine why this is stuck at 20 Hz
+    UPDATE_RATE = 20
+
     # Open file to store logs
     if LOG_DATA:
         f = open(log_path, "w")
@@ -153,7 +244,9 @@ if __name__ == "__main__":
                                        [0, 0.145],
                                        [0.145, 0],
                                        [-0.145, 0]
-                                    ]))
+                                    ]),
+                                    initial_position = [7.01, 1.828],
+                                    update_rate = UPDATE_RATE)
 
     # Set up subscribers for sensor messages
     anchor_distance_subs = [
@@ -180,8 +273,11 @@ if __name__ == "__main__":
 
 
     rospy.loginfo("Beginning Particle Filtering")
-    # Publish at 10 Hz
-    rate = rospy.Rate(100) # 10hz
+
+
+    # Publish at 20 Hz
+    rate = rospy.Rate(20) # 20hz
+
     seq = 0
     while not rospy.is_shutdown():
         # Retrieve particle states
