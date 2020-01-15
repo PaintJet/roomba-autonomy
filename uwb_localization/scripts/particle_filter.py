@@ -7,10 +7,16 @@ import rospy
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Twist
 from std_msgs.msg import Float64
 
+# ROS tf2 imports
+import tf
+import tf_conversions # Use to convert from Euler angles to quaternions
+
 
 from pfilter import ParticleFilter, independent_sample, squared_error, gaussian_noise
 import numpy as np
 from scipy.stats import uniform, norm
+
+
 
 
 
@@ -119,6 +125,7 @@ class UWBParticleFilter:
         delta_t = 1/self.update_rate
 
         # Calculate change in angle and arc length traversed
+        #TODO: FIGURE OUT WHY THESE CONSTANTS ARE REQUIRED
         delta_theta = 17*cmd_vel.angular.z * delta_t
         delta_s = 17*cmd_vel.linear.x * delta_t
 
@@ -155,8 +162,8 @@ class UWBParticleFilter:
             particle_states[i][1] = particle_states[i][1] + delta_y_robot
             particle_states[i][2] = particle_states[i][2] + delta_theta
 
-            if(i == 0):
-                print("delta_x: {} \t delta_y: {} \t delta_theta: {}".format(delta_x_robot, delta_y_robot, delta_theta))
+            # if(i == 0):
+            #     print("delta_x: {} \t delta_y: {} \t delta_theta: {}".format(delta_x_robot, delta_y_robot, delta_theta))
 
 
         # Return updated particles
@@ -271,9 +278,13 @@ if __name__ == "__main__":
     # Create publish to publish expected pose
     pose_pub = rospy.Publisher('/uwb/pf/pose', PoseStamped, queue_size = 10)
 
+    # Transform broadcaster to broadcast localization info
+    transform_broadcaster = tf.TransformBroadcaster()
+    # Transform listener is used to listen to the transform from odom --> base_link frame
+    transform_listener = tf.TransformListener()
+
 
     rospy.loginfo("Beginning Particle Filtering")
-
 
     # Publish at 20 Hz
     rate = rospy.Rate(20) # 20hz
@@ -284,7 +295,7 @@ if __name__ == "__main__":
         particles = pf.get_particle_states()
         estimated_pose = pf.get_state()
 
-        # Create message
+        # Create message for outputting particle states
         pose_array = PoseArray()
 
         # Instantiate a list to store all of the poses in the pose message
@@ -313,8 +324,9 @@ if __name__ == "__main__":
 
         particles_pub.publish(pose_array)
 
-        ### Publish estimated pose ###
+        ### Publish estimated pose as message ###
         pose_msg = PoseStamped()
+
         # Write position to message
         pose_msg.pose.position.x = estimated_pose[0]
         pose_msg.pose.position.y = estimated_pose[1]
@@ -331,6 +343,43 @@ if __name__ == "__main__":
         pose_msg.header.seq = seq
 
         pose_pub.publish(pose_msg)
+
+
+        ### Publish estimated pose as transform ###
+        # According to ROS standards, the localization software onboard the robot should publish the transform from map --> odom frames
+        # odom --> base_link represents the estimate of the position of the robot using only odometry data, provides an estimate of pose that is continuous (does not jump)
+        #           but that drifts over time
+        # Therefore, the localization node publishes the transformation from the map --> odom frame to correct for the drift such that the map --> base_link transformation
+        # provides an accurate estimation of the robot pose
+
+
+        try:
+            # First we need to get the estimate of the robot pose from the odometry data
+            (trans_base_odom, rot_base_odom) = transform_listener.lookupTransform('/odom', '/base_link', rospy.Time(0))
+
+            # Extract rotation from quaternion
+            (roll_base_odom, pitch_base_odom, yaw_base_odom) = tf_conversions.transformations.euler_from_quaternion(rot_base_odom)
+
+            # theta_odom_map is the error between the particle filter estimated orientation vs the odometry estimated orientation
+            # Once again assumes 2D robot - robot does not fly or roll
+            theta_odom_map = estimated_pose[2] - yaw_base_odom
+
+            #Next, we find the difference in the position estimate between the particle filter and the odometry
+            x_odom_map = estimated_pose[0] - trans_base_odom[0]*np.cos(theta_odom_map) + trans_base_odom[1]*np.sin(theta_odom_map)
+            y_odom_map = estimated_pose[1] - trans_base_odom[1]*np.cos(theta_odom_map) - trans_base_odom[0]*np.sin(theta_odom_map)
+            z_odom_map = 0 # Assuming the robot is not magically flying
+
+
+
+            # Finally, we convert back to quaternion
+            q = tf_conversions.transformations.quaternion_from_euler(0, 0, theta_odom_map)
+
+            # Publish transform
+            transform_broadcaster.sendTransform((x_odom_map, y_odom_map, z_odom_map), q, rospy.Time.now(), "/odom", "/map")
+
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.logwarn("Unable to publish transformation from /map --> /odom because of an error with transform from /odom --> /base_link")
+            continue
 
         if LOG_DATA:
             msg = "{},{}\n".format(estimated_pose[0], estimated_pose[1])
