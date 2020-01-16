@@ -1,0 +1,11 @@
+<launch>
+    <!-- Launch roomba drivers -->
+    <include file="$(find ca_driver)/launch/create_2.launch"/>
+
+    <!-- Launch node to publish UWB data -->
+    <include file="$(find uwb_localization)/launch/uwb_publisher.launch"/>
+
+    <!-- Launch IMU node -->
+    <include file="$(find navx_ros)/launch/imu_launch.launch"/>
+
+</launch>
