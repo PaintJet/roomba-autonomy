@@ -5,4 +5,7 @@
         <param name="autorepeat_rate" value="20" />
     </node>
 
+    <!-- Teleop control node - reads joy command, publishes Twist message -->
+    <node name="teleop_control" pkg="teleop_control" type="teleop_control.py" />
+
 </launch>

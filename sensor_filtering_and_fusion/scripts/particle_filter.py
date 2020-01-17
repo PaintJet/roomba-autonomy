@@ -105,7 +105,7 @@ class UWBParticleFilter:
                     y_tag = self.tag_transforms[j][0] * np.sin(particle_states[i][2]) + self.tag_transforms[j][1] * np.cos(particle_states[i][2]) + particle_states[i][1]
                     expected_tag_positon = np.array([x_tag, y_tag])
 
-                    # Expected observation is the
+                    # Expected observation is the distance from the tag to the anchor
                     expected_observations[i][self.num_anchors * j + k] = np.linalg.norm(expected_tag_positon - self.anchor_positions[k])
         return expected_observations
 
@@ -158,8 +158,8 @@ class UWBParticleFilter:
             delta_x = delta_x_robot*np.cos(particle_states[i][2]) - delta_y_robot*np.sin(particle_states[i][2])
             delta_y = delta_x_robot*np.sin(particle_states[i][2]) + delta_y_robot*np.cos(particle_states[i][2])
 
-            particle_states[i][0] = particle_states[i][0] + delta_x_robot
-            particle_states[i][1] = particle_states[i][1] + delta_y_robot
+            particle_states[i][0] = particle_states[i][0] + delta_x
+            particle_states[i][1] = particle_states[i][1] + delta_y
             particle_states[i][2] = particle_states[i][2] + delta_theta
 
             # if(i == 0):
@@ -231,9 +231,9 @@ if __name__ == "__main__":
 
     # Read the locations of the anchors from the ros messages
     anchor0Loc = rospy.wait_for_message('/uwb/0/anchors/9205/position', Point)
-    # anchor1Loc = rospy.wait_for_message('/uwb/0/anchors/9AAB/position', Point)
-    # anchor2Loc = rospy.wait_for_message('/uwb/0/anchors/C518/position', Point)
-    # anchor3Loc = rospy.wait_for_message('/uwb/0/anchors/D81B/position', Point)
+    anchor1Loc = rospy.wait_for_message('/uwb/0/anchors/9AAB/position', Point)
+    anchor2Loc = rospy.wait_for_message('/uwb/0/anchors/C518/position', Point)
+    anchor3Loc = rospy.wait_for_message('/uwb/0/anchors/D81B/position', Point)
 
     # Instantiate particle filter
     # pf = UWBParticleFilter(np.array([[anchor0Loc.x, anchor0Loc.y]
@@ -245,7 +245,12 @@ if __name__ == "__main__":
                                        [0.0, 0.0],
                                        [9.14, 13.11],
                                        [0.0, 13.41],
-                                       [7.01, 1.22]
+                                       [7.01, 1.22],
+                                       [0.0, 0.0],
+                                       [0.0, 0.0],
+                                       [0.0, 0.0],
+                                       [0.0, 0.0],
+                                       [0.0, 0.0]
                                     ]),
                                     tag_transforms = np.array([
                                        [0, 0.145],
@@ -257,20 +262,35 @@ if __name__ == "__main__":
 
     # Set up subscribers for sensor messages
     anchor_distance_subs = [
-        rospy.Subscriber("/uwb/0/anchors/9205/distance", Float64, create_observation_function(0, 0, 3, 4, pf)),
-        rospy.Subscriber("/uwb/0/anchors/9AAB/distance", Float64, create_observation_function(0, 1, 3, 4, pf)),
-        rospy.Subscriber("/uwb/0/anchors/C518/distance", Float64, create_observation_function(0, 2, 3, 4, pf)),
-        rospy.Subscriber("/uwb/0/anchors/D81B/distance", Float64, create_observation_function(0, 3, 3, 4, pf)),
+        rospy.Subscriber("/uwb/0/anchors/9205/distance", Float64, create_observation_function(0, 0, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/9AAB/distance", Float64, create_observation_function(0, 1, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/C518/distance", Float64, create_observation_function(0, 2, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/D81B/distance", Float64, create_observation_function(0, 3, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(0, 4, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(0, 5, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(0, 6, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(0, 7, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(0, 8, 3, 9, pf)),
 
-        rospy.Subscriber("/uwb/1/anchors/9205/distance", Float64, create_observation_function(1, 0, 3, 4, pf)),
-        rospy.Subscriber("/uwb/1/anchors/9AAB/distance", Float64, create_observation_function(1, 1, 3, 4, pf)),
-        rospy.Subscriber("/uwb/1/anchors/C518/distance", Float64, create_observation_function(1, 2, 3, 4, pf)),
-        rospy.Subscriber("/uwb/1/anchors/D81B/distance", Float64, create_observation_function(1, 3, 3, 4, pf)),
+        rospy.Subscriber("/uwb/1/anchors/9205/distance", Float64, create_observation_function(1, 0, 3, 9, pf)),
+        rospy.Subscriber("/uwb/1/anchors/9AAB/distance", Float64, create_observation_function(1, 1, 3, 9, pf)),
+        rospy.Subscriber("/uwb/1/anchors/C518/distance", Float64, create_observation_function(1, 2, 3, 9, pf)),
+        rospy.Subscriber("/uwb/1/anchors/D81B/distance", Float64, create_observation_function(1, 3, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(1, 4, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(1, 5, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(1, 6, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(1, 7, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(1, 8, 3, 9, pf)),
 
-        rospy.Subscriber("/uwb/2/anchors/9205/distance", Float64, create_observation_function(2, 0, 3, 4, pf)),
-        rospy.Subscriber("/uwb/2/anchors/9AAB/distance", Float64, create_observation_function(2, 1, 3, 4, pf)),
-        rospy.Subscriber("/uwb/2/anchors/C518/distance", Float64, create_observation_function(2, 2, 3, 4, pf)),
-        rospy.Subscriber("/uwb/2/anchors/D81B/distance", Float64, create_observation_function(2, 3, 3, 4, pf))
+        rospy.Subscriber("/uwb/2/anchors/9205/distance", Float64, create_observation_function(2, 0, 3, 9, pf)),
+        rospy.Subscriber("/uwb/2/anchors/9AAB/distance", Float64, create_observation_function(2, 1, 3, 9, pf)),
+        rospy.Subscriber("/uwb/2/anchors/C518/distance", Float64, create_observation_function(2, 2, 3, 9, pf)),
+        rospy.Subscriber("/uwb/2/anchors/D81B/distance", Float64, create_observation_function(2, 3, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(2, 4, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(2, 5, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(2, 6, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(2, 7, 3, 9, pf)),
+        rospy.Subscriber("/uwb/0/anchors/0/distance", Float64, create_observation_function(2, 8, 3, 9, pf))
     ]
 
     # Create publisher to publish particle states
