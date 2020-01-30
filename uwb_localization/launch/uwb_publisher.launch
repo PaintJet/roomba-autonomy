@@ -10,7 +10,7 @@
     </node>
 
     <!-- Add publishers for static transforms from robot base to UWB modules -->
-    <node pkg="tf" type="static_transform_publisher" name="uwb_front_tf_publisher" args="0.145 0 0 0 0 0 1 base_link uwb_module_front" />
-    <node pkg="tf" type="static_transform_publisher" name="uwb_right_tf_publisher" args="0 -0.145 0 0 0 0 1 base_link uwb_module_right" />
-    <node pkg="tf" type="static_transform_publisher" name="uwb_left_tf_publisher"  args="0 0.145 0 0 0 0 1 base_link uwb_module_left" />
+    <node pkg="tf" type="static_transform_publisher" name="uwb_front_tf_publisher" args="0.145 0 0 0 0 0 base_link uwb_module_front 100" />
+    <node pkg="tf" type="static_transform_publisher" name="uwb_right_tf_publisher" args="0 -0.145 0 0 0 0 base_link uwb_module_right 100" />
+    <node pkg="tf" type="static_transform_publisher" name="uwb_left_tf_publisher"  args="0 0.145 0 0 0 0 base_link uwb_module_left 100" />
 </launch>

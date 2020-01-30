@@ -54,7 +54,7 @@ class TeleopControl:
     # Sets drive speed based on left joystick input
     def set_drive_speed(self, data):
         twist = Twist()
-        twist.linear.x = data.axes[1]/2
+        twist.linear.x = data.axes[1]/4
         twist.angular.z = data.axes[2]
         self.drive_pub.publish(twist)
 
