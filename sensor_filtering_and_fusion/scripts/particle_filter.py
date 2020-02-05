@@ -32,7 +32,7 @@ class UWBParticleFilter:
         # Number of particles
         self.n = 100
         # Sensor covariance for range measurement of UWB modules
-        self.UWB_COVARIANCE = 1
+        self.UWB_COVARIANCE = 0.5
         self.IMU_COVARIANCE = 0.05
 
         self.update_rate = float(update_rate) #Hz
@@ -47,8 +47,8 @@ class UWBParticleFilter:
         # Prior sampling function for each of the state variables
         # We assume uniform distribution over [0 m, 20 m]
         self.prior_fn = independent_sample([
-            norm(loc = initial_position[0], scale = 5).rvs,
-            norm(loc = initial_position[0], scale = 5).rvs,
+            norm(loc = initial_position[0], scale = 2).rvs,
+            norm(loc = initial_position[0], scale = 2).rvs,
             uniform(loc =   0, scale = 2*np.pi).rvs
         ])
 
@@ -81,12 +81,16 @@ class UWBParticleFilter:
         # Create output vector of dimension (n,)
         particle_weights = np.zeros(shape = (hyp_observed.shape[0],), dtype = np.float32)
 
+        print(real_observed)
+
         # First split UWB and IMU data into separate arrays
         hyp_observed_uwb = hyp_observed[:,:-1]
         hyp_observed_imu = hyp_observed[:,-1:]
 
         real_observed_uwb = real_observed[:,:-1]
         real_observed_imu = real_observed[:,-1:]
+
+        print(real_observed_imu)
 
         # Assume the range measurements for the UWB modules has gaussian noise
         # Iterate over each particle
@@ -106,7 +110,6 @@ class UWBParticleFilter:
         #     return uwb_particle_weight + imu_particle_weight
 
         # particle_weights = map(calc_particle_weight, hyp_observed_uwb, hyp_observed_imu)
-
         for i in range(hyp_observed.shape[0]):
             # Calculate the gaussian pdf for the difference between the real and expected sensor measurements for all unmasked elements in the array
             # Since all of the sensor measurements are independent, we can simply multiply the 1-D probabilities
@@ -117,8 +120,9 @@ class UWBParticleFilter:
 
             imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed_imu[i][~real_observed_imu.mask[0]] - real_observed_imu.data[0][~real_observed_imu.mask[0]])
             imu_particle_weight = np.prod(imu_measurement_probability, axis = 0)
+            print("{} {} {}".format(hyp_observed_imu[i], real_observed_imu, imu_measurement_probability))
 
-            particle_weights[i] = uwb_particle_weight + imu_particle_weight
+            particle_weights[i] = uwb_particle_weight + 20*imu_particle_weight
 
         # for one, two in zip(particle_weights, particleWeights):
         #     if(one != two):
@@ -156,7 +160,7 @@ class UWBParticleFilter:
             # Add the IMU observation, which is just the orientation stored in the pf state
             expected_observations[i][-1] = particle_states[i][2]
 
-        print("Loop time: {}".format(time.clock()-start))
+        #print("Loop time: {}".format(time.clock()-start))
 
         return expected_observations
 
@@ -177,8 +181,8 @@ class UWBParticleFilter:
 
         # Calculate change in angle and arc length traversed
         #TODO: FIGURE OUT WHY THESE CONSTANTS ARE REQUIRED
-        delta_theta = 17*cmd_vel.angular.z * delta_t
-        delta_s = 17*cmd_vel.linear.x * delta_t
+        delta_theta = cmd_vel.angular.z * delta_t
+        delta_s = cmd_vel.linear.x * delta_t
 
         #print("delta_x: {} \t delta_y: {} \t delta_theta: {}".format(delta_x, delta_y, delta_theta))
 
@@ -243,20 +247,23 @@ class UWBParticleFilter:
 # num_anchors - Total number of anchors in the environment
 def create_uwb_observation_function(tag_number, anchor_number, num_sensors, num_tags, num_anchors, pf):
     def update_pf(message):
-        print("Running update for tag {} anchor {}".format(tag_number, anchor_number))
-        # Create array for particle filter observation
-        pf_input = np.zeros(shape = (num_sensors), dtype = np.float64)
+        # Get global arrays for sensor measurements
+        global sensor_measurements, sensor_measurements_mask
+
+        #print("Running update for tag {} anchor {}".format(tag_number, anchor_number))
+        # # Create array for particle filter observation
+        # pf_input = np.zeros(shape = (num_sensors), dtype = np.float64)
 
         # Create array to mask observation matrix
-        mask = np.ones(shape = (num_sensors))
+        # mask = np.ones(shape = (num_sensors))
 
         # Write the distance observation to the correct index associated with the tag and anchor
-        pf_input[num_anchors*tag_number + anchor_number] = message.data
+        sensor_measurements[num_anchors*tag_number + anchor_number] = message.data
 
         # Mask all elements except the one for the measurement we collected
-        mask[num_anchors*tag_number + anchor_number] = 0
+        sensor_measurements_mask[num_anchors*tag_number + anchor_number] = 0
 
-        pf.update(np.ma.masked_array(pf_input, mask = mask))
+        # pf.update(np.ma.masked_array(pf_input, mask = mask))
 
     return update_pf
 
@@ -266,21 +273,23 @@ def create_uwb_observation_function(tag_number, anchor_number, num_sensors, num_
 def create_imu_observation_function(pf, num_sensors):
     # Observation function that is called when data is received from the IMU
     def update_pf(message):
-        # Create array for particle filter observation
-        # message - ROS message with IMU data
-        pf_input = np.zeros(shape = (num_sensors), dtype = np.float64)
+        # Get global arrays for sensor measurements
+        global sensor_measurements, sensor_measurements_mask
 
-        # Create array to mask observation matrix
-        mask = np.ones(shape = (num_sensors))
+        # # Create array for particle filter observation
+        # # message - ROS message with IMU data
+        # pf_input = np.zeros(shape = (num_sensors), dtype = np.float64)
+
+        # # Create array to mask observation matrix
+        # mask = np.ones(shape = (num_sensors))
 
         # Write the distance observation to the correct index associated with the tag and anchor
-        _, _, pf_input[-1] = tf_conversions.transformations.euler_from_quaternion([message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w])
-        #print(pf_input[-1])
+        _, _, sensor_measurements[-1] = tf_conversions.transformations.euler_from_quaternion([message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w])
 
         # Mask all elements except the one for the measurement we collected
-        mask[-1] = 0
+        sensor_measurements_mask[-1] = 0
 
-        pf.update(np.ma.masked_array(pf_input, mask = mask))
+        # pf.update(np.ma.masked_array(pf_input, mask = mask))
 
     return update_pf
 
@@ -290,12 +299,12 @@ def create_imu_observation_function(pf, num_sensors):
 if __name__ == "__main__":
     ## Variables for data logging
     # Flag to decide if data should be logged during run
-    LOG_DATA = True
+    LOG_DATA = False
     log_path = "uwb-data.csv"
 
     # Rate to update particle filter
     # TODO determine why this is stuck at 20 Hz
-    UPDATE_RATE = 20
+    UPDATE_RATE = 2
 
     # Open file to store logs
     if LOG_DATA:
@@ -347,7 +356,7 @@ if __name__ == "__main__":
     pf = UWBParticleFilter(num_sensors = num_sensors, anchor_positions = np.array([
                                        [0.0, 0.0],
                                        [18.28, -2.28],
-                                       [18.28, -2.28],
+                                       [18.28, 7.01],
                                        [0.00, 4.62],
                                        [0.0, 0.0],
                                        [0.0, 0.0],
@@ -364,8 +373,11 @@ if __name__ == "__main__":
                                     update_rate = UPDATE_RATE)
 
 
-    # Set up subscribers for sensor messages
+    # Create numpy array and mask to store incoming sensor measurement
+    sensor_measurements = np.zeros(shape = (num_sensors), dtype = np.float32)
+    sensor_measurements_mask = np.ones(shape = (num_sensors))
 
+    # Set up subscribers for sensor messages
     anchor_distance_subs = [
         rospy.Subscriber("/uwb/0/anchors/9205/distance", Float64, create_uwb_observation_function(0, 0, num_sensors, num_tags, num_anchors, pf)),
         rospy.Subscriber("/uwb/0/anchors/C518/distance", Float64, create_uwb_observation_function(0, 1, num_sensors, num_tags, num_anchors, pf)),
@@ -414,13 +426,19 @@ if __name__ == "__main__":
     rospy.loginfo("Beginning Particle Filtering")
 
     # Publish at 20 Hz
-    rate = rospy.Rate(20) # 20hz
+    rate = rospy.Rate(UPDATE_RATE) # 20hz
 
     seq = 0
 
     while not rospy.is_shutdown():
+        start = time.clock()
+        test = np.ma.masked_array(sensor_measurements, mask = sensor_measurements_mask)
+        print("Outside loop")
+        print(test)
+        pf.update(np.ma.masked_array(sensor_measurements, mask = sensor_measurements_mask))
+        print("Loop time: {}".format(time.clock()-start))
 
-        # pf.update(np.ma.masked_array(sensor_measurements, mask = sensor_measurements_mask))
+        sensor_measurements_mask = np.ones(shape = (num_sensors))
 
         # Retrieve particle states
         particles = pf.get_particle_states()
