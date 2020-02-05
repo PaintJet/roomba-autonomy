@@ -5,8 +5,10 @@ from __future__ import print_function
 # ROS imports
 import rospy
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Twist
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Float64
+# Message for map
+from nav_msgs.msg import OccupancyGrid
 
 # ROS tf2 imports
 import tf
@@ -24,11 +26,11 @@ import time
 
 
 
-class UWBParticleFilter:
+class ParticleFilter:
     # Implementation of a particle filter to predict the pose of the robot given distance measurements from the modules
     # anchor_positions is the ground truth location of all of the anchors
     # tag_transforms is a 2d numpy array storing the [x,y] coordinates of each tag in the robot frame
-    def __init__(self, num_sensors, anchor_positions, tag_transforms, initial_position, update_rate):
+    def __init__(self, num_sensors, anchor_positions, tag_transforms, laser_transform, initial_position, occ_grid, update_rate):
         # Number of particles
         self.n = 100
         # Sensor covariance for range measurement of UWB modules
@@ -42,6 +44,11 @@ class UWBParticleFilter:
 
         # Number of sensors that we are reading data from
         self.num_sensors = num_sensors
+
+        #TODO Dynamically update this value
+        self.num_scans = 10
+
+        self.map = occ_grid
 
 
         # Prior sampling function for each of the state variables
@@ -67,6 +74,7 @@ class UWBParticleFilter:
 
         self.num_tags = tag_transforms.shape[0]
         self.tag_transforms = tag_transforms
+        self.laser_transform = laser_transform
 
         self.pf.update()
 
@@ -87,8 +95,8 @@ class UWBParticleFilter:
         hyp_observed_uwb = hyp_observed[:,:-1]
         hyp_observed_imu = hyp_observed[:,-1:]
 
-        real_observed_uwb = real_observed[:,:-1]
-        real_observed_imu = real_observed[:,-1:]
+        real_observed_uwb = real_observed[0,:-1]
+        real_observed_imu = real_observed[0,-1:]
 
         print(real_observed_imu)
 
@@ -111,11 +119,7 @@ class UWBParticleFilter:
 
         # particle_weights = map(calc_particle_weight, hyp_observed_uwb, hyp_observed_imu)
         for i in range(hyp_observed.shape[0]):
-            # Calculate the gaussian pdf for the difference between the real and expected sensor measurements for all unmasked elements in the array
-            # Since all of the sensor measurements are independent, we can simply multiply the 1-D probabilities
-            # We construct a gaussian with a mean of 0 and a variance empirically determined for the UWB modules
-            uwb_measurement_probabilities = norm(0, self.UWB_COVARIANCE).pdf(hyp_observed_uwb[i][~real_observed_uwb.mask[0]] - real_observed_uwb.data[0][~real_observed_uwb.mask[0]])
-            uwb_particle_weight = np.prod(uwb_measurement_probabilities, axis = 0)
+
             #print("UWB weighting  time: {}".format(time.clock() - start))
 
             imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed_imu[i][~real_observed_imu.mask[0]] - real_observed_imu.data[0][~real_observed_imu.mask[0]])
@@ -131,6 +135,76 @@ class UWBParticleFilter:
 
         return particle_weights
 
+    def calc_uwb_particle_weight(self, hyp_observed, real_observed):
+        # Calculate the gaussian pdf for the difference between the real and expected sensor measurements for all unmasked elements in the array
+        # Since all of the sensor measurements are independent, we can simply multiply the 1-D probabilities
+        # We construct a gaussian with a mean of 0 and a variance empirically determined for the UWB modules
+        uwb_measurement_probabilities = norm(0, self.UWB_COVARIANCE).pdf(hyp_observed[~real_observed.mask] - real_observed.data[~real_observed.mask])
+        return np.prod(uwb_measurement_probabilities, axis = 0)
+
+    def calc_imu_particle_weight(self, hyp_observed, real_observed):
+        imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed[~real_observed.mask] - real_observed.data[~real_observed.mask])
+        return  np.prod(imu_measurement_probability, axis = 0)
+
+    def calc_lidar_particle_weight_likelihood_field(self, hyp_observed, real_observed):
+        # Intialize total weight variable
+        total_weight = 0.0
+
+        # The hyp_observed vector stores the estimated 2d pose of the lidar in the world frame
+        #TODO this is a hacky way to get the pose that needs to be fixed later
+        # Pose of the lidar retrieved from hype observed
+        lidar_pose = hyp_observed[self.num_tags*self.num_anchors : self.num_tags*self.num_anchors + 3]
+
+        # Particle weight
+        p = 1.0
+
+        # Calculate constant terms for the particle weight
+        z_hit_denom = 2 * self.sigma_hit * self.sigma_hit
+        z_rand_mult = 1.0/self.lidar_range_max
+
+        for i in range(self.num_scans):
+            # Retrieve range & bearing in easy to access variables
+            obs_range = real_observed[self.num_tags*self.num_anchors + i]
+            obs_bearing = real_observed[self.num_tags*self.num_anchors + self.num_scans + i]
+
+            pz = 0.0;
+
+            # Compute the endpoint of the beam
+            beam_x = lidar_pose[0] + obs_range * cos(lidar_pose[2] + obs_bearing);
+            beam_y = lidar_pose[1] + obs_range * sin(lidar_pose[2] + obs_bearing);
+
+            # Get occupancy grid coordinates
+            #TODO Move this to map utils
+            mi = floor((beam_x - 0) / self.map["resolution"] + 0.5)
+            mj = floor((beam_y - 0) / self.map["resolution"] + 0.5)
+
+            # Part 1: Get distance from the hit to closest obstacle.
+            # Off-map penalized as max distance
+            # TODO Move map validity checking to map utils
+            if(!MAP_VALID(self->map, mi, mj))
+                z = self->map->max_occ_dist;
+            else
+                z = self->map->cells[MAP_INDEX(self->map,mi,mj)].occ_dist;
+            // Gaussian model
+            // NOTE: this should have a normalization of 1/(sqrt(2pi)*sigma)
+            pz += self->z_hit * exp(-(z * z) / z_hit_denom);
+            // Part 2: random measurements
+            pz += self->z_rand * z_rand_mult;
+
+            // TODO: outlier rejection for short readings
+
+            assert(pz <= 1.0);
+            assert(pz >= 0.0);
+            //      p *= pz;
+            // here we have an ad-hoc weighting scheme for combining beam probs
+            // works well, though...
+            p += pz*pz*pz;
+
+
+
+
+
+
 
     # observation_function
     # Accepts the state of all the particles and returns the predicted observation for each one
@@ -141,28 +215,52 @@ class UWBParticleFilter:
         # h is the dimension of the observation
         expected_observations = np.zeros(shape = (self.n, self.num_sensors))
 
-        # TODO Make this more efficient using map or something
-        # Calculated expected observations for UWB
-        start = time.clock()
+        # Calculated expected observations
+        num_uwb_measurements = self.num_tags*self.num_anchors
         for i in range(self.n):
-            for j in range(self.num_tags):
-                for k in range(self.num_anchors):
-                    #print("{} {}".format(particle_states[i], self.anchor_positions[j]), end = "\n")
+            # Update UWB predicted observations
+            expected_observations[i][0:num_uwb_measurements] = self.uwb_observation_function(particle_states[i])
 
-                    # Calculate expected position of the tag in the world frame
-                    x_tag = self.tag_transforms[j][0] * np.cos(particle_states[i][2]) - self.tag_transforms[j][1] * np.sin(particle_states[i][2]) + particle_states[i][0]
-                    y_tag = self.tag_transforms[j][0] * np.sin(particle_states[i][2]) + self.tag_transforms[j][1] * np.cos(particle_states[i][2]) + particle_states[i][1]
-                    expected_tag_positon = np.array([x_tag, y_tag])
-
-                    # Expected observation is the distance from the tag to the anchor
-                    expected_observations[i][self.num_anchors * j + k] = np.linalg.norm(expected_tag_positon - self.anchor_positions[k])
+            # Don't update the lidar observations because we are using the likelihood model to generate the weights for the particles
+            # If we switch to the beam model, we will have to update expected observations using raycasts
+            expected_observations[i][num_uwb_measurements:num_uwb_measurements+3] = self.lidar_observation_function(particle_states[i])
 
             # Add the IMU observation, which is just the orientation stored in the pf state
-            expected_observations[i][-1] = particle_states[i][2]
+            expected_observations[i][-1] = self.imu_observation_function(particle_states[i])
 
         #print("Loop time: {}".format(time.clock()-start))
 
         return expected_observations
+
+    # uwb_observation_function
+    # Accepts the state of a given particle and returns the UWB observations for that particle
+    def uwb_observation_function(self, particle_state):
+        expected_observations = np.zeros(shape = (self.num_tags*self.num_anchors))
+        for j in range(self.num_tags):
+            for k in range(self.num_anchors):
+                #print("{} {}".format(particle_states[i], self.anchor_positions[j]), end = "\n")
+
+                # Calculate expected position of the tag in the world frame
+                x_tag = self.tag_transforms[j][0] * np.cos(particle_state[2]) - self.tag_transforms[j][1] * np.sin(particle_state[2]) + particle_state[0]
+                y_tag = self.tag_transforms[j][0] * np.sin(particle_state[2]) + self.tag_transforms[j][1] * np.cos(particle_state[2]) + particle_state[1]
+                expected_tag_positon = np.array([x_tag, y_tag])
+
+                # Expected observation is the distance from the tag to the anchor
+                expected_observations[self.num_anchors * j + k] = np.linalg.norm(expected_tag_positon - self.anchor_positions[k])
+        return expected_observations
+
+
+    def imu_observation_function(self, particle_state):
+        return particle_state[2]
+
+    # Currently, the lidar observation function simply returns the pose of the lidar given the estimated particle pose
+    def lidar_observation_function(self, particle_state):
+        # Get 2D pose of LIDAR relative to map for the current particle
+        x_lidar = self.laser_transform[j][0] * np.cos(particle_state[2]) - self.tag_transforms[j][1] * np.sin(particle_state[2]) + particle_state[0]
+        y_lidar = self.laser_transform[j][0] * np.sin(particle_state[2]) + self.tag_transforms[j][1] * np.cos(particle_state[2]) + particle_state[1]
+        theta_lidar = particle_state[2]
+        return np.array([x_lidar, y_lidar, particle_state[2]])
+
 
     # dynamics_function
     # Accepts the state of all of the particles and returns the predicted state based on the control input to the robot
@@ -238,15 +336,16 @@ class UWBParticleFilter:
     def get_state(self):
         return self.pf.mean_state
 
-# create_uwb_observation_function
+# create_uwb_sensor_update_function
 # Factory function that generates an observation function for each of the UWB anchors
-# The observation function will craft the observation input into the particle filter and feed into the pf
+# The observation function will craft the observation input into the particle filter and write it to the global sensor_measurements vector
+# sensor_vector_pos - Start index for the UWB measurements in the sensor measurement vector
 # tag_number - Which tag on the robot is it
 # anchor_number - Which anchor in the environment is it
 # num_tags - Total number of UWB tags on the robot
 # num_anchors - Total number of anchors in the environment
-def create_uwb_observation_function(tag_number, anchor_number, num_sensors, num_tags, num_anchors, pf):
-    def update_pf(message):
+def create_uwb_sensor_update_function(sensor_vector_pos, tag_number, anchor_number, num_sensors, num_tags, num_anchors, pf):
+    def update_sensor_vector(message):
         # Get global arrays for sensor measurements
         global sensor_measurements, sensor_measurements_mask
 
@@ -258,10 +357,10 @@ def create_uwb_observation_function(tag_number, anchor_number, num_sensors, num_
         # mask = np.ones(shape = (num_sensors))
 
         # Write the distance observation to the correct index associated with the tag and anchor
-        sensor_measurements[num_anchors*tag_number + anchor_number] = message.data
+        sensor_measurements[num_anchors*tag_number + anchor_number + sensor_vector_pos] = message.data
 
         # Mask all elements except the one for the measurement we collected
-        sensor_measurements_mask[num_anchors*tag_number + anchor_number] = 0
+        sensor_measurements_mask[num_anchors*tag_number + anchor_number + sensor_vector_pos] = 0
 
         # pf.update(np.ma.masked_array(pf_input, mask = mask))
 
@@ -269,19 +368,13 @@ def create_uwb_observation_function(tag_number, anchor_number, num_sensors, num_
 
 # create_imu_observation_function
 # Factory function that generates an observation function for the IMU
-# The observation function will craft the observation input into the particle filter and feed into the pf
-def create_imu_observation_function(pf, num_sensors):
+# sensor_vector pos - Array index for storing the IMU measurement in the sensor measurement vector
+# The observation function will craft the observation input into the particle filter and write it to the global sensor_measurements vector
+def create_imu_sensor_update_function(sensor_vector_pos):
     # Observation function that is called when data is received from the IMU
-    def update_pf(message):
+    def update_sensor_vector(message):
         # Get global arrays for sensor measurements
         global sensor_measurements, sensor_measurements_mask
-
-        # # Create array for particle filter observation
-        # # message - ROS message with IMU data
-        # pf_input = np.zeros(shape = (num_sensors), dtype = np.float64)
-
-        # # Create array to mask observation matrix
-        # mask = np.ones(shape = (num_sensors))
 
         # Write the distance observation to the correct index associated with the tag and anchor
         _, _, sensor_measurements[-1] = tf_conversions.transformations.euler_from_quaternion([message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w])
@@ -292,6 +385,38 @@ def create_imu_observation_function(pf, num_sensors):
         # pf.update(np.ma.masked_array(pf_input, mask = mask))
 
     return update_pf
+
+
+# create_lidar_observation_function
+# Factory function that generates an observation function for the lidar laser scans
+# sensor_vector pos - Start array index for the LIDAR scan data in the sensor measurement vector
+# The observation function will craft the observation input into the particle filter and write it to the global sensor_measurements vector
+def create_lidar_sensor_update_function(sensor_vector_pos):
+    # Observation function that is called when data is received from the IMU
+    def update_sensor_vector(message):
+        # Get global arrays for sensor measurements
+        global sensor_measurements, sensor_measurements_mask
+
+        # Retrieve number of sensor measurements
+        num_measurements = len(message.ranges)
+
+        # Loop over all range measurements
+        for i, range_measurement in enumerate(message.ranges):
+            # Calculate bearing of sensor measurement
+            angle = message.angle_min + i*message.angle_increment
+
+            # Ignore sensor measurement if it is outside of scanner range
+            if(range_measurement < range_max and range_measurement > range_min):
+                # Add angle and range measurement to sensor vector
+                sensor_measurements[sensor_vector_pos + i] = range_measurement
+                sensor_measurements[sensor_vector_pos + num_measurements + i] = angle
+
+                # Remove mask from these elements
+                sensor_measurements_mask[sensor_vector_pos + i] = 0
+                sensor_measurements_mask[sensor_vector_pos + num_measurements + i] = 0
+
+    return update_pf
+
 
 
 
@@ -315,10 +440,35 @@ if __name__ == "__main__":
 
     rospy.loginfo("Initializing Particle Filter Node...")
 
+    rospy.loginfo("Retrieving map of environment...")
 
+    # Retrieve occupancy grid
+    occupancy_grid_msg = rospy.wait_for_message('/map', OccupancyGrid)
+    # Convert occupancy grid into numpy array that is easily readable
+    occupancy_grid = {
+        "map" : np.array(occupancy_grid_msg.data, dtype = np.int8),
+        "resolution" : occupancy_grid_msg.info.resolution,
+    }
+
+
+    rospy.loginfo("Successfully loaded map!")
+
+
+    # NUM UWB tags
     num_tags = 3
+    # NUM UWB anchors
     num_anchors = 9
-    num_sensors = 1 + num_tags*num_anchors
+
+    # TODO Dynamically adjust this value
+    num_lidar_range_scans = 10
+    lidar_range_min = 1
+    lidar_range_max = 2
+
+    # Total number of sensors - used to construct the sensor measurement array
+    # Each tag receives a range measurement from each anchor, creating num_tags*num_anchors measurements
+    # 1 sensor measurement from IMU - angular position
+    # Number of sensor measurements for the LIDAR is 2*(number of scans) for range and bearing
+    num_sensors = 1 + num_tags*num_anchors + 2*num_lidar_range_scans
 
     # Read the locations of the anchors from the ros messages
     # anchor0Loc = rospy.wait_for_message('/uwb/0/anchors/9205/position', Point)
@@ -352,8 +502,8 @@ if __name__ == "__main__":
     #                                 ]),
     #                                 initial_position = [0., 0.0],
     #                                 update_rate = UPDATE_RATE)
-
-    pf = UWBParticleFilter(num_sensors = num_sensors, anchor_positions = np.array([
+    #TODO INTRODUCE THE CORRECT LASER TRANSFORM
+    pf = ParticleFilter(num_sensors = num_sensors, anchor_positions = np.array([
                                        [0.0, 0.0],
                                        [18.28, -2.28],
                                        [18.28, 7.01],
@@ -368,8 +518,10 @@ if __name__ == "__main__":
                                        [0, 0.145],
                                        [0.145, 0],
                                        [-0.145, 0]
-                                    ]),
+                                    ])
+                                    laser_transform = np.array([0, .145]),
                                     initial_position = [0., 0.0],
+                                    occ_grid = occupancy_grid,
                                     update_rate = UPDATE_RATE)
 
 
@@ -377,40 +529,43 @@ if __name__ == "__main__":
     sensor_measurements = np.zeros(shape = (num_sensors), dtype = np.float32)
     sensor_measurements_mask = np.ones(shape = (num_sensors))
 
+    ######################################################## SENSOR SUBSCRIBERS ########################################################
     # Set up subscribers for sensor messages
     anchor_distance_subs = [
-        rospy.Subscriber("/uwb/0/anchors/9205/distance", Float64, create_uwb_observation_function(0, 0, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/C518/distance", Float64, create_uwb_observation_function(0, 1, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/9AAB/distance", Float64, create_uwb_observation_function(0, 2, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/D81B/distance", Float64, create_uwb_observation_function(0, 3, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/998D/distance", Float64, create_uwb_observation_function(0, 4, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/D499/distance", Float64, create_uwb_observation_function(0, 5, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/9BAC/distance", Float64, create_uwb_observation_function(0, 6, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/1C31/distance", Float64, create_uwb_observation_function(0, 7, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/0/anchors/91BA/distance", Float64, create_uwb_observation_function(0, 8, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/9205/distance", Float64, create_uwb_sensor_update_function(0, 0, 0, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/C518/distance", Float64, create_uwb_sensor_update_function(0, 0, 1, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/9AAB/distance", Float64, create_uwb_sensor_update_function(0, 0, 2, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/D81B/distance", Float64, create_uwb_sensor_update_function(0, 0, 3, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/998D/distance", Float64, create_uwb_sensor_update_function(0, 0, 4, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/D499/distance", Float64, create_uwb_sensor_update_function(0, 0, 5, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/9BAC/distance", Float64, create_uwb_sensor_update_function(0, 0, 6, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/1C31/distance", Float64, create_uwb_sensor_update_function(0, 0, 7, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/0/anchors/91BA/distance", Float64, create_uwb_sensor_update_function(0, 0, 8, num_sensors, num_tags, num_anchors, pf)),
 
-        rospy.Subscriber("/uwb/1/anchors/9205/distance", Float64, create_uwb_observation_function(1, 0, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/C518/distance", Float64, create_uwb_observation_function(1, 1, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/9AAB/distance", Float64, create_uwb_observation_function(1, 2, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/D81B/distance", Float64, create_uwb_observation_function(1, 3, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/998D/distance", Float64, create_uwb_observation_function(1, 4, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/D499/distance", Float64, create_uwb_observation_function(1, 5, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/9BAC/distance", Float64, create_uwb_observation_function(1, 6, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/1C31/distance", Float64, create_uwb_observation_function(1, 7, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/1/anchors/91BA/distance", Float64, create_uwb_observation_function(1, 8, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/9205/distance", Float64, create_uwb_sensor_update_function(0, 1, 0, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/C518/distance", Float64, create_uwb_sensor_update_function(0, 1, 1, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/9AAB/distance", Float64, create_uwb_sensor_update_function(0, 1, 2, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/D81B/distance", Float64, create_uwb_sensor_update_function(0, 1, 3, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/998D/distance", Float64, create_uwb_sensor_update_function(0, 1, 4, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/D499/distance", Float64, create_uwb_sensor_update_function(0, 1, 5, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/9BAC/distance", Float64, create_uwb_sensor_update_function(0, 1, 6, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/1C31/distance", Float64, create_uwb_sensor_update_function(0, 1, 7, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/1/anchors/91BA/distance", Float64, create_uwb_sensor_update_function(0, 1, 8, num_sensors, num_tags, num_anchors, pf)),
 
-        rospy.Subscriber("/uwb/2/anchors/9205/distance", Float64, create_uwb_observation_function(2, 0, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/9AAB/distance", Float64, create_uwb_observation_function(2, 1, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/C518/distance", Float64, create_uwb_observation_function(2, 2, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/D81B/distance", Float64, create_uwb_observation_function(2, 3, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/998D/distance", Float64, create_uwb_observation_function(2, 4, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/D499/distance", Float64, create_uwb_observation_function(2, 5, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/9BAC/distance", Float64, create_uwb_observation_function(2, 6, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/1C31/distance", Float64, create_uwb_observation_function(2, 7, num_sensors, num_tags, num_anchors, pf)),
-        rospy.Subscriber("/uwb/2/anchors/91BA/distance", Float64, create_uwb_observation_function(2, 8, num_sensors, num_tags, num_anchors, pf))
+        rospy.Subscriber("/uwb/2/anchors/9205/distance", Float64, create_uwb_sensor_update_function(0, 2, 0, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/9AAB/distance", Float64, create_uwb_sensor_update_function(0, 2, 1, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/C518/distance", Float64, create_uwb_sensor_update_function(0, 2, 2, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/D81B/distance", Float64, create_uwb_sensor_update_function(0, 2, 3, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/998D/distance", Float64, create_uwb_sensor_update_function(0, 2, 4, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/D499/distance", Float64, create_uwb_sensor_update_function(0, 2, 5, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/9BAC/distance", Float64, create_uwb_sensor_update_function(0, 2, 6, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/1C31/distance", Float64, create_uwb_sensor_update_function(0, 2, 7, num_sensors, num_tags, num_anchors, pf)),
+        rospy.Subscriber("/uwb/2/anchors/91BA/distance", Float64, create_uwb_sensor_update_function(0, 2, 8, num_sensors, num_tags, num_anchors, pf))
     ]
-
-    imu_sub = rospy.Subscriber("/navx_node/Imu", Imu, create_imu_observation_function(pf, num_sensors))
+    # Subscriber for IMU
+    imu_sub = rospy.Subscriber("/navx_node/Imu", Imu, create_imu_sensor_update_function(-1))
+    # Subsriber for LIDAR
+    lidar_sub = rospy.Subscriber("/laser", LaserScan, create_lidar_sensor_update_function(num_tags*num_anchors))
 
     # Create publisher to publish particle states
     particles_pub = rospy.Publisher('/uwb/pf/particles', PoseArray, queue_size=10)
