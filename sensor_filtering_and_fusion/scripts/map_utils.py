@@ -102,9 +102,23 @@ class Map:
         distance_i = abs(cell["i"] - cell["src_i"])
         distance_j = abs(cell["j"] - cell["src_j"])
 
+
+
         # Record distance for cell
         self.distances[cell["i"]][cell["j"]] = distance_i + distance_j
 
         self.queue.append(cell)
 
         self.marked[cell["i"]][cell["j"]] = 1
+
+    def get_distance(self, cell):
+        distance_i = abs(cell["i"] - cell["src_i"])
+        distance_j = abs(cell["j"] - cell["src_j"])
+
+        return self.resolution*np.sqrt(np.power(distance_i, 2) + np.power(distance_j, 2))
+
+    def on_map(self, i, j):
+        if(i < 0 or i >= self.size_x or j < 0 or j >= self.size_y):
+            return False
+
+        return True

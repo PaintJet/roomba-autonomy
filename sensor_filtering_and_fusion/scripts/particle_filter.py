@@ -21,6 +21,8 @@ from scipy.stats import uniform, norm
 
 import time
 
+from map_utils import Map
+
 
 
 
@@ -175,20 +177,19 @@ class ParticleFilter:
 
             # Get occupancy grid coordinates
             #TODO Move this to map utils
-            mi = floor((beam_x - 0) / self.map["resolution"] + 0.5)
-            mj = floor((beam_y - 0) / self.map["resolution"] + 0.5)
+            mi = np.floor((beam_x - 0) / self.map.resolution + 0.5)
+            mj = np.floor((beam_y - 0) / self.map.resolution + 0.5)
 
             # Part 1: Get distance from the hit to closest obstacle.
             # Off-map penalized as max distance
-            # TODO Move map validity checking to map utils
+            if(not self.map.on_map( mi, mj)):
+                z = self.map.MAX_DISTANCE
+            else:
+                z = self.map.distances[mi, mj] # Retrieve distance to nearest neighbor
 
-            if(!MAP_VALID(self->map, mi, mj))
-                z = self->map->max_occ_dist;
-            else
-                z = self->map->cells[MAP_INDEX(self->map,mi,mj)].occ_dist;
-            // Gaussian model
-            // NOTE: this should have a normalization of 1/(sqrt(2pi)*sigma)
-            pz += self->z_hit * exp(-(z * z) / z_hit_denom);
+            # Gaussian model
+            # NOTE: this should have a normalization of 1/(sqrt(2pi)*sigma)
+            pz += z_hit * exp(-(z * z) / z_hit_denom);
             // Part 2: random measurements
             pz += self->z_rand * z_rand_mult;
 
@@ -445,11 +446,9 @@ if __name__ == "__main__":
 
     # Retrieve occupancy grid
     occupancy_grid_msg = rospy.wait_for_message('/map', OccupancyGrid)
-    # Convert occupancy grid into numpy array that is easily readable
-    occupancy_grid = {
-        "map" : np.array(occupancy_grid_msg.data, dtype = np.int8),
-        "resolution" : occupancy_grid_msg.info.resolution,
-    }
+
+    # Create a map object
+    occupancy_grid = Map(occupancy_grid_msg)
 
 
     rospy.loginfo("Successfully loaded map!")
