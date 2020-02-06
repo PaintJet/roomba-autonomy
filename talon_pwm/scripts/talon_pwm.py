@@ -59,7 +59,7 @@ class TalonPWM:
 
         # Determine Period For Each Motor
         PL = (PMAX - PMIN) / (LEFT_WL_MAX * 2) * W_LEFT + PMIN
-        PR = PMAX - ( (PMAX - PMIN) / (RIGHT_WL_MAX * 2) * W_RIGHT) # + PMIN
+        PR = PMAX/2 - ( (PMAX - PMIN) / (RIGHT_WL_MAX * 2) * W_RIGHT) # + PMIN
 
         return PL * FREQUENCY * 150, PR * FREQUENCY * 150
 
