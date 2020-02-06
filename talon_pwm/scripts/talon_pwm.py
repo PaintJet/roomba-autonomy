@@ -37,6 +37,7 @@ class TalonPWM:
 
     def set_motor(self, motor, duty_cycle):
         self.pi.hardware_PWM(motor, FREQUENCY, duty_cycle * 10000)
+	rospy.loginfo(duty_cycle)
 
     def stop_motors(self):
         self.set_motor(RIGHT_MOTOR, 0)
@@ -58,9 +59,9 @@ class TalonPWM:
 
         # Determine Period For Each Motor
         PL = (PMAX - PMIN) / (LEFT_WL_MAX * 2) * W_LEFT + PMIN
-        PR = (PMAX - PMIN) / (RIGHT_WL_MAX * 2) * W_RIGHT + PMIN
+        PR = PMAX - ( (PMAX - PMIN) / (RIGHT_WL_MAX * 2) * W_RIGHT) # + PMIN
 
-        return PL * FREQUENCY, PR * FREQUENCY
+        return PL * FREQUENCY * 150, PR * FREQUENCY * 150
 
 
 if __name__ == '__main__':
