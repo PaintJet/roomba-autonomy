@@ -181,6 +181,7 @@ class ParticleFilter:
             # Part 1: Get distance from the hit to closest obstacle.
             # Off-map penalized as max distance
             # TODO Move map validity checking to map utils
+
             if(!MAP_VALID(self->map, mi, mj))
                 z = self->map->max_occ_dist;
             else
