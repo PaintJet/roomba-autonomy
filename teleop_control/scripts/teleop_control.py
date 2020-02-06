@@ -46,6 +46,13 @@ class TeleopControl:
         # Initialize subscribers
         self.joy_sub = rospy.Subscriber("joy", Joy, self.joy_callback)
 
+        self.MAX_LINEAR_ACCEL = 0.1
+        self.MAX_ANGULAR_ACCEL = 0.1
+
+        #
+        self.prev_linear_vel = 0.0
+        self.prev_angular_vel = 0.0
+
 
     # Callback function for joystick controls
     def joy_callback(self, data):
@@ -54,8 +61,19 @@ class TeleopControl:
     # Sets drive speed based on left joystick input
     def set_drive_speed(self, data):
         twist = Twist()
+
         twist.linear.x = data.axes[1]/2
         twist.angular.z = data.axes[2]
+
+        if(abs(self.prev_linear_vel - data.axes[1]/2) > self.MAX_LINEAR_ACCEL):
+            twist.linear.x = (data.axes[1]/2 - self.prev_linear_vel)/(abs(data.axes[1]/2 - self.prev_linear_vel)) * self.MAX_LINEAR_ACCEL + self.prev_linear_vel
+
+        if(abs(self.prev_angular_vel - data.axes[2]) > self.MAX_ANGULAR_ACCEL):
+            twist.angular.z = (data.axes[2] - self.prev_angular_vel)/(abs(data.axes[2] - self.prev_angular_vel)) * self.MAX_ANGULAR_ACCEL + self.prev_angular_vel
+
+        self.prev_linear_vel = twist.linear.x
+        self.prev_angular_vel = twist.angular.z
+
         self.drive_pub.publish(twist)
 
 
