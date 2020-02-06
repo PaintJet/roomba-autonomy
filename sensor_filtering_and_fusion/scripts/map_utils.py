@@ -7,7 +7,7 @@ class Map:
 
 
         # Threshold above which occupancy grid cell is considered occupied
-        OCCUPIED_THRESHOLD = 0.9
+        OCCUPIED_THRESHOLD = 50
 
         # Create a flat occupancy grid
         # 1 - Occupied
@@ -22,7 +22,7 @@ class Map:
         self.size_y = map_msg.info.height
 
         # Store the resolution
-        self.resolution = 0.99 #map_msg.info.resolution
+        self.resolution = map_msg.info.resolution
 
         # Stores the distances to the nearest occupied cell
         self.distances = np.zeros(shape = self.occupancy_grid.shape)
@@ -33,6 +33,7 @@ class Map:
         self.queue = []
 
         # Maximum distance to a occupied node that we care about
+        #TODO Update max distance threshold
         self.MAX_DISTANCE = 10
 
         self.calc_distances()
@@ -107,10 +108,3 @@ class Map:
         self.queue.append(cell)
 
         self.marked[cell["i"]][cell["j"]] = 1
-
-
-
-
-
-
-test = Map(None)
