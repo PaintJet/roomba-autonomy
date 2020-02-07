@@ -2,8 +2,13 @@ import numpy as np
 
 class Map:
     def __init__(self, map_msg):
+        # Store the dimensions of the map
+        self.size_x = map_msg.info.width
+        self.size_y = map_msg.info.height
+
         # Store the occupancy grid as a np array row-major notation
         self.occupancy_grid = np.array(map_msg.data, dtype = np.int8)
+        self.occupancy_grid = np.reshape(self.occupancy_grid, newshape = (self.size_x, self.size_y))
 
 
         # Threshold above which occupancy grid cell is considered occupied
@@ -17,9 +22,7 @@ class Map:
         self.occupancy_grid_flat[self.occupancy_grid > OCCUPIED_THRESHOLD] = 1
         self.occupancy_grid_flat[self.occupancy_grid == -1] = -1
 
-        # Store the dimensions of the map
-        self.size_x = map_msg.info.width
-        self.size_y = map_msg.info.height
+
 
         # Store the resolution
         self.resolution = map_msg.info.resolution
@@ -36,6 +39,9 @@ class Map:
         #TODO Update max distance threshold
         self.MAX_DISTANCE = 10
 
+
+        print(self.size_x)
+        print(self.size_y)
         self.calc_distances()
 
     def calc_distances(self):
@@ -69,7 +75,7 @@ class Map:
                     "src_i" : cur_cell["src_i"],
                     "src_j" : cur_cell["src_j"]
                 })
-                print("Adding cell ({} {})".format(cur_cell["i"] - 1, cur_cell["j"]))
+                # print("Adding cell ({} {})".format(cur_cell["i"] - 1, cur_cell["j"]))
             if(cur_cell["j"] > 0):
                 self.enqueue({
                     "i" : cur_cell["i"],
@@ -77,7 +83,7 @@ class Map:
                     "src_i" : cur_cell["src_i"],
                     "src_j" : cur_cell["src_j"]
                 })
-                print("Adding cell ({} {})".format(cur_cell["i"], cur_cell["j"] - 1))
+                # print("Adding cell ({} {})".format(cur_cell["i"], cur_cell["j"] - 1))
             if(cur_cell["i"] < self.size_x - 1):
                 self.enqueue({
                     "i" : cur_cell["i"] + 1,
@@ -85,7 +91,7 @@ class Map:
                     "src_i" : cur_cell["src_i"],
                     "src_j" : cur_cell["src_j"]
                 })
-                print("Adding cell ({} {})".format(cur_cell["i"] + 1, cur_cell["j"]))
+                # print("Adding cell ({} {})".format(cur_cell["i"] + 1, cur_cell["j"]))
             if(cur_cell["j"] < self.size_y - 1):
                 self.enqueue({
                     "i" : cur_cell["i"],
@@ -93,7 +99,7 @@ class Map:
                     "src_i" : cur_cell["src_i"],
                     "src_j" : cur_cell["src_j"]
                 })
-                print("Adding cell ({} {})".format(cur_cell["i"], cur_cell["j"] + 1))
+                # print("Adding cell ({} {})".format(cur_cell["i"], cur_cell["j"] + 1))
 
     def enqueue(self, cell):
         if(self.marked[cell["i"]][cell["j"]] == 1):

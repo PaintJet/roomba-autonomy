@@ -28,7 +28,7 @@ from map_utils import Map
 
 
 
-class ParticleFilter:
+class UWBParticleFilter:
     # Implementation of a particle filter to predict the pose of the robot given distance measurements from the modules
     # anchor_positions is the ground truth location of all of the anchors
     # tag_transforms is a 2d numpy array storing the [x,y] coordinates of each tag in the robot frame
@@ -48,7 +48,7 @@ class ParticleFilter:
         self.num_sensors = num_sensors
 
         #TODO Dynamically update this value
-        self.num_scans = 10
+        self.num_scans = 90
 
         self.map = occ_grid
 
@@ -70,7 +70,7 @@ class ParticleFilter:
             observe_fn = self.observation_function,
             weight_fn = self.weight_function,
             dynamics_fn = self.dynamics_function,
-            noise_fn = lambda x: gaussian_noise(x, sigmas=[0.1, 0.1, 0.2])
+            noise_fn = lambda x: gaussian_noise(x, sigmas=[0.1, 0.1, 0.1])
         )
 
 
@@ -124,11 +124,17 @@ class ParticleFilter:
 
             #print("UWB weighting  time: {}".format(time.clock() - start))
 
-            imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed_imu[i][~real_observed_imu.mask[0]] - real_observed_imu.data[0][~real_observed_imu.mask[0]])
-            imu_particle_weight = np.prod(imu_measurement_probability, axis = 0)
-            print("{} {} {}".format(hyp_observed_imu[i], real_observed_imu, imu_measurement_probability))
+            #imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed_imu[i][~real_observed_imu.mask[0]] - real_observed_imu.data[0][~real_observed_imu.mask[0]])
+            #imu_particle_weight = np.prod(imu_measurement_probability, axis = 0)
 
-            particle_weights[i] = uwb_particle_weight + 20*imu_particle_weight
+
+            lidar_particle_weight = self.calc_lidar_particle_weight_likelihood_field(hyp_observed[i], real_observed[0])
+
+
+            # print("{} {} {}".format(hyp_observed_imu[i], real_observed_imu, imu_measurement_probability))
+
+            #particle_weights[i] = calc_uwb_particle_weight(hyp_observed[i], real_observed[0]) + imu_particle_weight + lidar_particle_weight
+            particle_weights[i] = lidar_particle_weight
 
         # for one, two in zip(particle_weights, particleWeights):
         #     if(one != two):
@@ -149,13 +155,16 @@ class ParticleFilter:
         return  np.prod(imu_measurement_probability, axis = 0)
 
     def calc_lidar_particle_weight_likelihood_field(self, hyp_observed, real_observed):
-        # Intialize total weight variable
-        total_weight = 0.0
-
         # The hyp_observed vector stores the estimated 2d pose of the lidar in the world frame
         #TODO this is a hacky way to get the pose that needs to be fixed later
         # Pose of the lidar retrieved from hype observed
         lidar_pose = hyp_observed[self.num_tags*self.num_anchors : self.num_tags*self.num_anchors + 3]
+
+        #TODO Parametrize these constants
+        z_hit = 1
+        z_rand = 0
+        self.sigma_hit = 0.005
+        self.lidar_range_max = 10
 
         # Particle weight
         p = 1.0
@@ -164,43 +173,50 @@ class ParticleFilter:
         z_hit_denom = 2 * self.sigma_hit * self.sigma_hit
         z_rand_mult = 1.0/self.lidar_range_max
 
+
+
         for i in range(self.num_scans):
-            # Retrieve range & bearing in easy to access variables
-            obs_range = real_observed[self.num_tags*self.num_anchors + i]
-            obs_bearing = real_observed[self.num_tags*self.num_anchors + self.num_scans + i]
+            if(real_observed.mask[self.num_tags*self.num_anchors + i] == 0):
+                # Retrieve range & bearing in easy to access variables
+                obs_range = real_observed[self.num_tags*self.num_anchors + i]
+                obs_bearing = real_observed[self.num_tags*self.num_anchors + self.num_scans + i]
 
-            pz = 0.0;
+                pz = 0.0;
 
-            # Compute the endpoint of the beam
-            beam_x = lidar_pose[0] + obs_range * cos(lidar_pose[2] + obs_bearing);
-            beam_y = lidar_pose[1] + obs_range * sin(lidar_pose[2] + obs_bearing);
+                # Compute the endpoint of the beam
+                beam_x = lidar_pose[0] + obs_range * np.cos(lidar_pose[2] + obs_bearing);
+                beam_y = lidar_pose[1] + obs_range * np.sin(lidar_pose[2] + obs_bearing);
 
-            # Get occupancy grid coordinates
-            #TODO Move this to map utils
-            mi = np.floor((beam_x - 0) / self.map.resolution + 0.5)
-            mj = np.floor((beam_y - 0) / self.map.resolution + 0.5)
+                # Get occupancy grid coordinates
+                #TODO Move this to map utils
+                mi = int(np.floor((beam_x - 0) / self.map.resolution + 0.5))
+                mj = int(np.floor((beam_y - 0) / self.map.resolution + 0.5))
 
-            # Part 1: Get distance from the hit to closest obstacle.
-            # Off-map penalized as max distance
-            if(not self.map.on_map( mi, mj)):
-                z = self.map.MAX_DISTANCE
-            else:
-                z = self.map.distances[mi, mj] # Retrieve distance to nearest neighbor
+                # Part 1: Get distance from the hit to closest obstacle.
+                # Off-map penalized as max distance
+                if(not self.map.on_map( mi, mj)):
+                    z = self.map.MAX_DISTANCE
+                else:
+                    z = self.map.distances[mi, mj] # Retrieve distance to nearest neighbor
 
-            # Gaussian model
-            # NOTE: this should have a normalization of 1/(sqrt(2pi)*sigma)
-            pz += z_hit * exp(-(z * z) / z_hit_denom);
-            // Part 2: random measurements
-            pz += self->z_rand * z_rand_mult;
+                # Gaussian model
+                # NOTE: this should have a normalization of 1/(sqrt(2pi)*sigma)
+                pz += z_hit * np.exp(-(z * z) / z_hit_denom)
 
-            // TODO: outlier rejection for short readings
+                # Part 2: random measurements
+                pz += z_rand * z_rand_mult
 
-            assert(pz <= 1.0);
-            assert(pz >= 0.0);
-            //      p *= pz;
-            // here we have an ad-hoc weighting scheme for combining beam probs
-            // works well, though...
-            p += pz*pz*pz;
+                # TODO: outlier rejection for short readings
+
+                assert pz <= 1.0
+                assert pz >= 0.0
+
+                #      p *= pz;
+                # here we have an ad-hoc weighting scheme for combining beam probs
+                # works well, though...
+                p += pz*pz*pz
+
+        return p
 
 
 
@@ -258,8 +274,8 @@ class ParticleFilter:
     # Currently, the lidar observation function simply returns the pose of the lidar given the estimated particle pose
     def lidar_observation_function(self, particle_state):
         # Get 2D pose of LIDAR relative to map for the current particle
-        x_lidar = self.laser_transform[j][0] * np.cos(particle_state[2]) - self.tag_transforms[j][1] * np.sin(particle_state[2]) + particle_state[0]
-        y_lidar = self.laser_transform[j][0] * np.sin(particle_state[2]) + self.tag_transforms[j][1] * np.cos(particle_state[2]) + particle_state[1]
+        x_lidar = self.laser_transform[0] * np.cos(particle_state[2]) - self.laser_transform[1] * np.sin(particle_state[2]) + particle_state[0]
+        y_lidar = self.laser_transform[0] * np.sin(particle_state[2]) + self.laser_transform[1] * np.cos(particle_state[2]) + particle_state[1]
         theta_lidar = particle_state[2]
         return np.array([x_lidar, y_lidar, particle_state[2]])
 
@@ -366,7 +382,7 @@ def create_uwb_sensor_update_function(sensor_vector_pos, tag_number, anchor_numb
 
         # pf.update(np.ma.masked_array(pf_input, mask = mask))
 
-    return update_pf
+    return update_sensor_vector
 
 # create_imu_observation_function
 # Factory function that generates an observation function for the IMU
@@ -386,7 +402,7 @@ def create_imu_sensor_update_function(sensor_vector_pos):
 
         # pf.update(np.ma.masked_array(pf_input, mask = mask))
 
-    return update_pf
+    return update_sensor_vector
 
 
 # create_lidar_observation_function
@@ -404,6 +420,10 @@ def create_lidar_sensor_update_function(sensor_vector_pos):
 
         # Loop over all range measurements
         for i, range_measurement in enumerate(message.ranges):
+            #TODO Constants
+            range_max = 10
+            range_min = 0
+
             # Calculate bearing of sensor measurement
             angle = message.angle_min + i*message.angle_increment
 
@@ -417,7 +437,7 @@ def create_lidar_sensor_update_function(sensor_vector_pos):
                 sensor_measurements_mask[sensor_vector_pos + i] = 0
                 sensor_measurements_mask[sensor_vector_pos + num_measurements + i] = 0
 
-    return update_pf
+    return update_sensor_vector
 
 
 
@@ -460,7 +480,7 @@ if __name__ == "__main__":
     num_anchors = 9
 
     # TODO Dynamically adjust this value
-    num_lidar_range_scans = 10
+    num_lidar_range_scans = 90
     lidar_range_min = 1
     lidar_range_max = 2
 
@@ -503,7 +523,7 @@ if __name__ == "__main__":
     #                                 initial_position = [0., 0.0],
     #                                 update_rate = UPDATE_RATE)
     #TODO INTRODUCE THE CORRECT LASER TRANSFORM
-    pf = ParticleFilter(num_sensors = num_sensors, anchor_positions = np.array([
+    pf = UWBParticleFilter(num_sensors = num_sensors, anchor_positions = np.array([
                                        [0.0, 0.0],
                                        [18.28, -2.28],
                                        [18.28, 7.01],
@@ -518,7 +538,7 @@ if __name__ == "__main__":
                                        [0, 0.145],
                                        [0.145, 0],
                                        [-0.145, 0]
-                                    ])
+                                    ]),
                                     laser_transform = np.array([0, .145]),
                                     initial_position = [0., 0.0],
                                     occ_grid = occupancy_grid,
@@ -565,7 +585,7 @@ if __name__ == "__main__":
     # Subscriber for IMU
     imu_sub = rospy.Subscriber("/navx_node/Imu", Imu, create_imu_sensor_update_function(-1))
     # Subsriber for LIDAR
-    lidar_sub = rospy.Subscriber("/laser", LaserScan, create_lidar_sensor_update_function(num_tags*num_anchors))
+    lidar_sub = rospy.Subscriber("/scan", LaserScan, create_lidar_sensor_update_function(num_tags*num_anchors))
 
     # Create publisher to publish particle states
     particles_pub = rospy.Publisher('/uwb/pf/particles', PoseArray, queue_size=10)
@@ -591,7 +611,7 @@ if __name__ == "__main__":
         print("Outside loop")
         print(test)
         pf.update(np.ma.masked_array(sensor_measurements, mask = sensor_measurements_mask))
-        print("Loop time: {}".format(time.clock()-start))
+        # print("Loop time: {}".format(time.clock()-start))
 
         sensor_measurements_mask = np.ones(shape = (num_sensors))
 
