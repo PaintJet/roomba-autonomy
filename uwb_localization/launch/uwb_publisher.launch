@@ -3,9 +3,9 @@
     <!-- UWB tag publisher - launches the tag_publisher node from the dwm1001-tag package to publish the data from the UWB modules -->
     <node name="tag_publisher" pkg="dwm1001-tag" type="tag_publisher.py">
         <rosparam>
-            tag_1_path: "/dev/serial/by-id/usb-SEGGER_J-Link_000760101952-if00"
-            tag_2_path: "/dev/serial/by-id/usb-SEGGER_J-Link_000760101958-if00"
-            tag_3_path: "/dev/serial/by-id/usb-SEGGER_J-Link_000760101866-if00"
+            tag_1_path: "/dev/uwb_5"
+            tag_2_path: "/dev/uwb_6"
+            tag_3_path: "/dev/uwb_7"
         </rosparam>
     </node>
 

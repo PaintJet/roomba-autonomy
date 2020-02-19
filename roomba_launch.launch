@@ -8,4 +8,10 @@
     <!-- Launch IMU node -->
     <include file="$(find navx_ros)/launch/imu_launch.launch"/>
 
+    <!-- Launch RPLidar node -->
+    <include file="$(find rplidar_ros)/launch/rplidar_a3.launch"/>
+
+    <!-- Launch transform publisher node to define the transform from base_link to laser scanner -->
+    <node pkg="tf" type="static_transform_publisher" name="lidar_tf_publisher" args="0.13 0 0.29 -1.5707963 0 0 base_link laser 100" />
+
 </launch>
