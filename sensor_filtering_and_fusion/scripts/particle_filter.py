@@ -22,6 +22,9 @@ from pfilter import ParticleFilter, independent_sample, squared_error, gaussian_
 import numpy as np
 from scipy.stats import uniform, norm
 
+# Threading for pf
+from threading import Lock
+
 import time
 
 from map_utils import Map
@@ -40,7 +43,7 @@ class UWBParticleFilter:
         self.n = 100
         # Sensor covariance for range measurement of UWB modules
         self.UWB_COVARIANCE = 0.5
-        self.IMU_COVARIANCE = 0.05
+        self.IMU_COVARIANCE = 0.01
 
         self.update_rate = float(update_rate) #Hz
 
@@ -50,23 +53,23 @@ class UWBParticleFilter:
         # Number of sensors that we are reading data from
         self.num_sensors = num_sensors
 
-        #TODO Dynamically update this value
-        self.num_scans = num_scans
-
         self.map = occ_grid
 
-        self.num_anchors = anchor_positions.shape[0]
+        self.num_anchors = len(anchor_names)
         self.anchor_names = anchor_names
-        self.anchor_positions = [None] * len(anchor_names)
+        self.anchor_positions = np.zeros(shape = (len(anchor_names), 2))
 
         self.num_tags = tag_transforms.shape[0]
         self.tag_transforms = tag_transforms
 
         # Save LIDAR parameters
         self.laser_transform = lidar_params["transform"]
-        self.lidar_range_max = liar_params["range_max"]
+        self.lidar_range_max = lidar_params["range_max"]
         self.lidar_range_min = lidar_params["range_min"]
         self.num_scans = lidar_params["num_scans"]
+
+        # Create a lock object for blocking parallel access to pf objects
+        self.pf_lock = Lock()
 
         self.initialize(initial_position)
 
@@ -78,8 +81,10 @@ class UWBParticleFilter:
         self.prior_fn = independent_sample([
             norm(loc = initial_position[0], scale = 2).rvs,
             norm(loc = initial_position[1], scale = 2).rvs,
-            uniform(loc =   initial_position[2], scale = np.pi).rvs
+            uniform(loc = initial_position[2], scale = np.pi).rvs
         ])
+
+        self.pf_lock.acquire()
 
         self.pf = ParticleFilter(
             n_particles = self.n,
@@ -87,10 +92,12 @@ class UWBParticleFilter:
             observe_fn = self.observation_function,
             weight_fn = self.weight_function,
             dynamics_fn = self.dynamics_function,
-            noise_fn = lambda x: gaussian_noise(x, sigmas=[0.1, 0.1, 0.1])
+            noise_fn = lambda x: gaussian_noise(x, sigmas=[0.08, 0.08, 0.08])
         )
 
         self.pf.update()
+
+        self.pf_lock.release()
 
 
     # weight_function
@@ -103,7 +110,7 @@ class UWBParticleFilter:
         # Create output vector of dimension (n,)
         particle_weights = np.zeros(shape = (hyp_observed.shape[0],), dtype = np.float32)
 
-        print(real_observed)
+        #print(real_observed)
 
         # First split UWB and IMU data into separate arrays
         hyp_observed_uwb = hyp_observed[:,:-1]
@@ -112,7 +119,7 @@ class UWBParticleFilter:
         real_observed_uwb = real_observed[0,:-1]
         real_observed_imu = real_observed[0,-1:]
 
-        print(real_observed_imu)
+        #print(real_observed_imu)
 
         # Assume the range measurements for the UWB modules has gaussian noise
         # Iterate over each particle
@@ -139,14 +146,15 @@ class UWBParticleFilter:
             #imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed_imu[i][~real_observed_imu.mask[0]] - real_observed_imu.data[0][~real_observed_imu.mask[0]])
             #imu_particle_weight = np.prod(imu_measurement_probability, axis = 0)
 
-
             lidar_particle_weight = self.calc_lidar_particle_weight_likelihood_field(hyp_observed[i], real_observed[0])
+
+            imu_particle_weight = self.calc_imu_particle_weight(hyp_observed[i][-1:], real_observed[0][-1:])
 
 
             # print("{} {} {}".format(hyp_observed_imu[i], real_observed_imu, imu_measurement_probability))
 
             #particle_weights[i] = calc_uwb_particle_weight(hyp_observed[i], real_observed[0]) + imu_particle_weight + lidar_particle_weight
-            particle_weights[i] = lidar_particle_weight
+            particle_weights[i] = self.calc_uwb_particle_weight(hyp_observed[i], real_observed[0]) + 2*imu_particle_weight
 
         # for one, two in zip(particle_weights, particleWeights):
         #     if(one != two):
@@ -156,6 +164,7 @@ class UWBParticleFilter:
         return particle_weights
 
     def calc_uwb_particle_weight(self, hyp_observed, real_observed):
+        #print(real_observed)
         # Calculate the gaussian pdf for the difference between the real and expected sensor measurements for all unmasked elements in the array
         # Since all of the sensor measurements are independent, we can simply multiply the 1-D probabilities
         # We construct a gaussian with a mean of 0 and a variance empirically determined for the UWB modules
@@ -163,6 +172,7 @@ class UWBParticleFilter:
         return np.prod(uwb_measurement_probabilities, axis = 0)
 
     def calc_imu_particle_weight(self, hyp_observed, real_observed):
+        #print(real_observed)
         imu_measurement_probability = norm(0, self.IMU_COVARIANCE).pdf(hyp_observed[~real_observed.mask] - real_observed.data[~real_observed.mask])
         return  np.prod(imu_measurement_probability, axis = 0)
 
@@ -270,10 +280,10 @@ class UWBParticleFilter:
                 # Calculate expected position of the tag in the world frame
                 x_tag = self.tag_transforms[j][0] * np.cos(particle_state[2]) - self.tag_transforms[j][1] * np.sin(particle_state[2]) + particle_state[0]
                 y_tag = self.tag_transforms[j][0] * np.sin(particle_state[2]) + self.tag_transforms[j][1] * np.cos(particle_state[2]) + particle_state[1]
-                expected_tag_positon = np.array([x_tag, y_tag])
+                expected_tag_position = np.array([x_tag, y_tag])
 
                 # Expected observation is the distance from the tag to the anchor
-                expected_observations[self.num_anchors * j + k] = np.linalg.norm(expected_tag_positon - self.anchor_positions[k])
+                expected_observations[self.num_anchors * j + k] = np.linalg.norm(expected_tag_position - self.anchor_positions[k])
         return expected_observations
 
 
@@ -299,7 +309,12 @@ class UWBParticleFilter:
     #  returns predicted particle_states (n,d) vector with evolved particles
     def dynamics_function(self, particle_states):
         # Get current cmd_vel
-        cmd_vel = rospy.wait_for_message("/cmd_vel", Twist)
+        try:
+            cmd_vel = rospy.wait_for_message("/cmd_vel", Twist, timeout = 0.1)
+        except:
+            cmd_vel = Twist()
+            cmd_vel.angular.z = 0
+            cmd_vel.linear.x = 0
 
         # Time step between updates
         delta_t = 1/self.update_rate
@@ -354,13 +369,19 @@ class UWBParticleFilter:
     # Accepts the observation as (4,) array containing range measurements from the anchors
     # Supports masked numpy array for partial observations
     def update(self, observation):
+        self.pf_lock.acquire()
         self.pf.update(observation)
+        self.pf_lock.release()
 
     def get_particle_states(self):
+        self.pf_lock.acquire()
         return self.pf.original_particles
+        self.pf_lock.release()
 
     def get_state(self):
+        self.pf_lock.acquire()
         return self.pf.mean_state
+        self.pf_lock.release()
 
 # create_uwb_sensor_update_function
 # Factory function that generates an observation function for each of the UWB anchors
@@ -385,9 +406,9 @@ def create_uwb_sensor_update_function(sensor_vector_pos, tag_number, pf):
             sensor_measurements_mask[pf.num_anchors*tag_number + anchor_number + sensor_vector_pos] = 0
 
             # Check if there is an anchor position already saved in the pf
-            if(not pf.anchor_positions[anchor_number]):
-                # Save position of anchor in pf state
-                pf.anchor_positions[anchor_number] = np.array([reading.anchor_position.x, reading.anchor_position.y, reading.anchor_position.z])
+            # Save position of anchor in pf state
+            pf.anchor_positions[anchor_number][0] = reading.anchor_position.x
+            pf.anchor_positions[anchor_number][1] = reading.anchor_position.y
 
     return update_sensor_vector
 
@@ -458,7 +479,7 @@ if __name__ == "__main__":
 
     # Rate to update particle filter
     # TODO determine why this is stuck at 20 Hz
-    UPDATE_RATE = 2
+    UPDATE_RATE = 1
 
     # Open file to store logs
     if LOG_DATA:
@@ -489,8 +510,10 @@ if __name__ == "__main__":
     # Get the number of lidar scans and range
     initial_scan = rospy.wait_for_message('/scan_filtered', LaserScan)
 
+    # Paramaters that describe the scan data
+    # num_scans has a one added to account for rounding errors with the number of scans
     lidar_params = {
-        "num_scans" : int((initial_scan.angle_max - initial_scan.angle_min)/initial_scan.angle_increment),
+        "num_scans" : int((initial_scan.angle_max - initial_scan.angle_min)/initial_scan.angle_increment) + 1,
         "range_min" : initial_scan.range_min,
         "range_max" : initial_scan.range_max,
         "transform" : np.array([0, .145])
@@ -500,7 +523,46 @@ if __name__ == "__main__":
     # Each tag receives a range measurement from each anchor, creating num_tags*num_anchors measurements
     # 1 sensor measurement from IMU - angular position
     # Number of sensor measurements for the LIDAR is 2*(number of scans) for range and bearing
-    num_sensors = 1 + num_tags*len(anchor_names) + 2*num_lidar_range_scans
+    num_sensors = 1 + num_tags*len(anchor_names) + 2*lidar_params["num_scans"]
+
+    # Create numpy array and mask to store incoming sensor measurement
+    sensor_measurements = np.zeros(shape = (num_sensors), dtype = np.float32)
+    sensor_measurements_mask = np.ones(shape = (num_sensors))
+
+
+    ######################################################## INITIALIZE PARTICLE FILTER ########################################################
+    rospy.loginfo("Waiting for initial pose estimate, listening on topic /initialpose...")
+
+    # Get Initial Pose estimate for particle filter
+    initial_pose = rospy.wait_for_message("/initialpose", PoseWithCovarianceStamped)
+
+    _, _, theta = tf_conversions.transformations.euler_from_quaternion([initial_pose.pose.pose.orientation.x,
+                initial_pose.pose.pose.orientation.y,
+                initial_pose.pose.pose.orientation.z,
+                initial_pose.pose.pose.orientation.w])
+
+    initial_pose_arr = np.array([
+        initial_pose.pose.pose.position.x,
+        initial_pose.pose.pose.position.y,
+        theta
+    ])
+
+
+    rospy.loginfo("Initializing Particle Filter with pose estimate: {} {} {}".format(initial_pose_arr[0], initial_pose_arr[1], initial_pose_arr[2]))
+
+    pf = UWBParticleFilter(
+        num_sensors = num_sensors,
+        anchor_names = anchor_names,
+        tag_transforms = np.array([
+            [0, 0.145],
+            [0.145, 0],
+            [-0.145, 0]
+        ]),
+        lidar_params = lidar_params,
+        initial_position = initial_pose_arr,
+        occ_grid = occupancy_grid,
+        update_rate = UPDATE_RATE
+    )
 
     ######################################################## INITIAL POSE HANDLER ########################################################
     # create_pf_initial_pose_handler
@@ -515,7 +577,7 @@ if __name__ == "__main__":
 
             x = message.pose.pose.position.x
             y = message.pose.pose.position.y
-            theta = tf_conversions.transformations.euler_from_quaternion([message.pose.pose.orientation.x,
+            _, _, theta = tf_conversions.transformations.euler_from_quaternion([message.pose.pose.orientation.x,
                 message.pose.pose.orientation.y,
                 message.pose.pose.orientation.z,
                 message.pose.pose.orientation.w])
@@ -523,49 +585,10 @@ if __name__ == "__main__":
             rospy.loginfo("Re-initializing particle filter with new pose estimate: {} {} {}".format(x, y, theta))
 
             pf.initialize((x, y, theta))
+        return pf_initial_pose_handler
 
 
-
-
-    ######################################################## INITIALIZE PARTICLE FILTER ########################################################
-    rospy.loginfo("Waiting for initial pose estimate, listening on topic /initialpose...")
-
-    # Get Initial Pose estimate for particle filter
-    initial_pose = rospy.wait_for_message("/initialpose", PoseWithCovarianceStamped)
-
-    theta = tf_conversions.transformations.euler_from_quaternion([initial_pose.pose.pose.orientation.x,
-                initial_pose.pose.pose.orientation.y,
-                initial_pose.pose.pose.orientation.z,
-                initial_pose.pose.pose.orientation.w])
-
-    initial_pose_arr = np.array([
-        initial_pose.pose.pose.position.x,
-        initial_pose.pose.pose.position.y,
-        theta
-    ])
-
-
-    rospy.loginfo("Initializing Particle Filter with pose estimate: {} {} {}".format(x, y, theta))
-
-    pf = UWBParticleFilter(
-        num_sensors = num_sensors,
-        anchor_names = anchor_names,
-        tag_transforms = np.array([
-            [0, 0.145],
-            [0.145, 0],
-            [-0.145, 0]
-        ]),
-        lidar_params = lidar_params,
-        num_scans = num_lidar_range_scans,
-        initial_position = initial_pose_arr,
-        occ_grid = occupancy_grid,
-        update_rate = UPDATE_RATE
-    )
-
-
-    # Create numpy array and mask to store incoming sensor measurement
-    sensor_measurements = np.zeros(shape = (num_sensors), dtype = np.float32)
-    sensor_measurements_mask = np.ones(shape = (num_sensors))
+    rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, create_pf_initial_pose_handler(pf))
 
     ######################################################## SENSOR SUBSCRIBERS ########################################################
 
@@ -576,10 +599,11 @@ if __name__ == "__main__":
         rospy.Subscriber("/uwb/2/readings", UWBReadingArray, create_uwb_sensor_update_function(0, 2, pf))
     ]
 
+
     # Subscriber for IMU
     imu_sub = rospy.Subscriber("/navx_node/Imu", Imu, create_imu_sensor_update_function(-1))
     # Subsriber for LIDAR
-    lidar_sub = rospy.Subscriber("/scan_filtered", LaserScan, create_lidar_sensor_update_function(num_tags*num_anchors))
+    lidar_sub = rospy.Subscriber("/scan_filtered", LaserScan, create_lidar_sensor_update_function(num_tags*len(anchor_names)))
 
     # Create publisher to publish particle states
     particles_pub = rospy.Publisher('/uwb/pf/particles', PoseArray, queue_size=10)

@@ -11,7 +11,7 @@ cd ~/catkin_ws/src
 git clone https://github.com/PaintJet/roomba-autonomy.git
 ```
 
-Navigate back to the top directory of the `catkin_ws` and run `catkin_make` 
+Navigate back to the top directory of the `catkin_ws` and run `catkin_make`
 ```
 cd ~/catkin_ws
 catkin_make
@@ -29,7 +29,19 @@ To come, once launch files are written
 Software for determining the location of a camera relative to an ArUco marker placed in the environment. This package was developed for testing the performance of this localization method, but is no longer being used for localization due to poor performance at long distance and large angles.
 
 ### teleop_control
-Allows the robot to be controlled using a joystick. This is used for testing purposes of the motor control code.
+Allows the robot to be controlled using a joystick. This is used for testing purposes of the motor control code. The code in this package provides the same output at the autonomy stack does. Therefore, we can run the motors the same way the autonomous control code would.
 
 ### uwb_localization
-Localization of the robot using the Decawave DWM1001 ultra-wide band modules. This is the method the robot is currently using for localization. This package depends on the [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface) package in the PaintJet organination.
+Localization of the robot using the Decawave DWM1001 ultra-wide band modules. This is the method the robot is currently using for localization. This package depends on the [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface) package in the PaintJet organination. This package does not do robot localization in isolation, but instead uses the DWM1001-Interface to read data from multiple Decawave tags and publish it to topics for other packages to use.
+
+### sensor_filtering_and_fusion
+Implements filtering algorithms for sensor data to get useful outputs. This package is the main package responsbile for outputting the pose/state of the robot. To generate a stable state estimate, the package implements a particle filter to fuse the incoming sensor data.
+
+### mapping
+The mapping packages implements the code to receive a pointcloud map and translating it into a 2D occupancy grid and costmap for the other packages in the codebase to use for localization and path planning.
+
+### navigation
+The navigation package implements path planning and path following algorithms that generate motor commands for the robot. The path planning algorithm will take the pre-generated floor map from the mapping service and generate a route around it that efficiently covers the floor. Additionally, the package will take pose and velocity of the robot and generate motor commands to follow the path.
+
+
+
