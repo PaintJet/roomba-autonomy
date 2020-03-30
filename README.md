@@ -32,7 +32,7 @@ Software for determining the location of a camera relative to an ArUco marker pl
 Allows the robot to be controlled using a joystick. This is used for testing purposes of the motor control code. The code in this package provides the same output at the autonomy stack does. Therefore, we can run the motors the same way the autonomous control code would.
 
 ### uwb_localization
-Localization of the robot using the Decawave DWM1001 ultra-wide band modules. This is the method the robot is currently using for localization. This package depends on the [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface) package in the PaintJet organination. This package does not do robot localization in isolation, but instead uses the DWM1001-Interface to read data from multiple Decawave tags and publish it to topics for other packages to use.
+Localization of the robot using the Decawave DWM1001 ultra-wide band modules. This is the method the robot is currently using for localization. This package depends on the [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface) package in the PaintJet organization. This package does not do robot localization in isolation, but instead uses the DWM1001-Interface to read data from multiple Decawave tags and publish it to topics for other packages to use.
 
 ### sensor_filtering_and_fusion
 Implements filtering algorithms for sensor data to get useful outputs. This package is the main package responsbile for outputting the pose/state of the robot. To generate a stable state estimate, the package implements a particle filter to fuse the incoming sensor data.
