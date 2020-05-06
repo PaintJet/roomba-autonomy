@@ -16,7 +16,32 @@ To accomplish this desired workflow, we divided our autonomy stack into 6 subcom
 
 ![Robot Software Structure](pictures/high_level_org.png)
 
+This following diagram shows the resulting ROS Node structure.
+
+![ROS Node Structure](pictures/ros_node_structure.png)
+
 We have a detailed breakdown of each of these components in **SOFTWARE STRUCTURE page** in the documentation directory.
+
+
+## Testing Hardware
+This is a picture of the current state of the iRobot Create 2 robot used for testing autonomy code.
+
+![Picture of Roomba](pictures/roomba.png)
+
+
+## Documentation Table of Contents
+
+[Sensor Suite](documentation/sensor_suite.md)
+
+[Software Structure Details](documentation/software_structure_details.md)
+
+[Sensor Filtering and Fusion Implementation Documentation](sensor_filtering_and_fusion/README.md)
+
+[UWB Localization Documentation](uwb_localization/README.md)
+
+[Mapping Documentation](mapping/README.md)
+
+[Navigation Documentation](navigation/README.md)
 
 # Using our Software
 ## Installation and Setup
