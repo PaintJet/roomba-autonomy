@@ -59,24 +59,21 @@ catkin_make
 source ~/catkin_ws/devel/setup.bash
 ```
 
-## Usage
-To launch the entire robot software, a couple of steps have to be executed.
+## Dependencies
+You need to install the following dependencies. For the dependencies that have the source code linked, clone them into `~/catkin_ws/src` and run `catkin_make` as described earlier. Other packages can be installed by running:
 
-1. Launch roscore on main computer
-2. Ssh into raspberry pi and launch roomba_launch.launch
-3. On main computer, launch a static transform publisher between map and odom frame
-4. On main computer, launch mapping.launch
-5. on main computer launch lidar_angle_filter.launch
-6. On main computer, rosrun particle_filter.py and follow setup steps until filtering begins
-7. On main comptuer, kill map --> odom transform publisher
-8. On main computer, launch navigation.launch
+```
+sudo apt install ros-melodic-[PACKAGE NAME]
+````
 
-#### Problems to fix
-* Order dependence on launching parts of the program
-* Switch away from using octree to do occupancy grid generation
-* Fix particle filter not running
-
-## Launch files
+* [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface)
+* [navx-ros](https://github.com/PaintJet/navx_ros)
+* [create_autonomy](https://github.com/PaintJet/create_autonomy)
+* [point_cloud_io](https://github.com/ANYbotics/point_cloud_io)
+* [octomap_server](http://wiki.ros.org/octomap_server)
+* [move_base](http://wiki.ros.org/move_base)
+* [laser_filters](http://wiki.ros.org/laser_filters)
+* [joy](http://wiki.ros.org/joy)
 
 ## Packages
 
@@ -97,6 +94,29 @@ The mapping packages implements the code to receive a pointcloud map and transla
 
 ### navigation
 The navigation package implements path planning and path following algorithms that generate motor commands for the robot. The path planning algorithm will take the pre-generated floor map from the mapping service and generate a route around it that efficiently covers the floor. Additionally, the package will take pose and velocity of the robot and generate motor commands to follow the path.
+
+## Usage
+To launch the entire robot software, a couple of steps have to be executed.
+
+1. Launch roscore on main computer
+2. Ssh into raspberry pi and launch roomba_launch.launch
+3. On main computer, launch a static transform publisher between map and odom frame
+4. On main computer, launch mapping.launch
+5. on main computer launch lidar_angle_filter.launch
+6. On main computer, rosrun particle_filter.py and follow setup steps until filtering begins
+7. On main comptuer, kill map --> odom transform publisher
+8. On main computer, launch navigation.launch
+
+## Next Steps
+* Improve stability of particle filter so that it does not crash periodically
+* Eliminate the dependency of the mapping package on the localization package so that they do not have to started in the specific order mentioned above
+* Tune the parameters for the particle filter
+* Tune parameters for move_base
+* Implement high-level controller to control all ROS nodes and to plan a route to follow around job site
+* Move all robot configuration parameters to robot config file to make code robot-agnostic (NOTE: robot.yaml exists with parameters, but is not currently used to control any settings in the packages. It is simply an example file)
+
+
+
 
 # Contributors
 This repository was developed as a Senior Design/Capstone project for Mechanical Engineering @ Vanderbilt University in 2019-2020. The main software contributors are [Swapnil Pande](https://www.github.com/SwapnilPande), [John Mark Goeke](https://www.github.com/jmgoeke), and [Sam Gottlieb](https://www.github.com/gottlism). [Emmet Haden](https://www.github.com/emmethaden), [Braden Barnett](https://www.github.com/bradenbarnett), and Charles Tusa were the lead developers on the hardware of the robot.
