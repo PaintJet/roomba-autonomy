@@ -108,6 +108,9 @@ To launch the entire robot software, a couple of steps have to be executed.
 7. On main comptuer, kill map --> odom transform publisher
 8. On main computer, launch navigation.launch
 
+## Current State of the project
+We have a working implementation of all basic components of autonomy. Most of them have been tested individually and have been shown to work at a simple level. They have all been tested together only once. The components now need to be improved such that they work well together and are stable.
+
 ## Next Steps
 * Improve stability of particle filter so that it does not crash periodically
 * Eliminate the dependency of the mapping package on the localization package so that they do not have to started in the specific order mentioned above
