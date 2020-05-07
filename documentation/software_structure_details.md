@@ -31,12 +31,25 @@ The top layer of the autonomy stack is the high-level controller. This controlle
 
 
 ## ROS Implementation
+
+### ROS Node Structure
 Our implementation of these subcomponents in ROS do not perfectly align with the diagrams outlining their functionality. Therefore, the following diagram shows the actual ROS node structure for the autonomy stack. The blocks are nodes which are separate programs communicating with the ROS network. The arrows between the nodes are messages sent over the ROS network containing the necessary data.
 
 ![ROS Node Structure](../pictures/ros_node_structure.png)
 
 The only portion of the ROS node graph that is specific to the Roomba is the /ca_driver node, which sends commands to the drive motors and returns the wheel odometry data. On the full scale robot, this node simply needs to be replaced with a corresponding driver node written to control the drive motors and read the encoders.
 
-In addition to the ROS node graph, our robot system also maintains a transform tree (using the tf2 ROS package) that describes the transformation matrices between each of the links on the robot. The transform tree for our robot is presented in Figure 25, which we defined based on standards for ROS.
+In addition to the ROS node graph, our robot system also maintains a transform tree (using the tf2 ROS package) that describes the transformation matrices between each of the links on the robot. The transform tree for our robot is presented below, which we defined based on standards for ROS.
+
+### Transform Tree
+![Transform Tree](../pictures/transform_tree.png)
+
+The root of the tree is the fixed map frame, relative to which all other frames are defined. The cloud frame defines the transform from the fixed map frame to the imported point cloud data. On the right side of the branch, the center of the robot is defined by the base_footprint and base_link frames (they are in the same position, both are defined for compatibility between multiple packages). We define the pose of all of the sensors and actuators relative to the base_link frame. The most important transforms are the map →  odom →  base_footprint. The odom →  base_footprint transform is published by the motor driver that reads in the wheel odometry data. This transformation describes the position of the robot based on the measurements from the wheel encoders. Since it is using wheel encoders, there will be no discontinuities in this transformation over time. However, it is subject to drift. Therefore, we define the map → odom transformation, which is published by the particle filter. This transformation accounts for the drift in the odometry estimation to provide an accurate pose of the base_footprint relative to the map. This transformation is always accurate but can be discontinuous over time. This structure is defined so that there is an always accurate estimate of the robot pose (map → base_footprint), but there is also a continuously evolving estimation of pose (odom → base_footprint) that can be used for estimation of motion over short time periods.
+
+
+### Parameter File
+This tree structure is not unique to the Roomba. However, the specific transforms between the frames are. To make this architecture portable to the full scale robot, the robot code will accept a configuration file that defines the various transforms and other important parameters that characterize the robot. With this config file, the only changes that will be needed to port to the new robot will be passing the new parameter file. NOTE: The implementation is not mature enough to get parameters from the parameter file. This functionality needs to be added.
+
+
 
 
