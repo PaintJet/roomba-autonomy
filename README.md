@@ -68,6 +68,7 @@ sudo apt install ros-melodic-[PACKAGE NAME]
 
 * [DWM1001-Interface](https://github.com/PaintJet/DWM1001-Interface)
 * [navx-ros](https://github.com/PaintJet/navx_ros)
+* [rplidar-ros](http://wiki.ros.org/rplidar)
 * [create_autonomy](https://github.com/PaintJet/create_autonomy)
 * [point_cloud_io](https://github.com/ANYbotics/point_cloud_io)
 * [octomap_server](http://wiki.ros.org/octomap_server)
