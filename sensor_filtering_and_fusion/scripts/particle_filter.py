@@ -81,7 +81,7 @@ class UWBParticleFilter:
         self.prior_fn = independent_sample([
             norm(loc = initial_position[0], scale = 2).rvs,
             norm(loc = initial_position[1], scale = 2).rvs,
-            uniform(loc = initial_position[2], scale = np.pi).rvs
+            uniform(loc = initial_position[2], scale = np.pi/2).rvs
         ])
 
         self.pf_lock.acquire()
@@ -96,8 +96,10 @@ class UWBParticleFilter:
         )
 
         self.pf.update()
+        rospy.loginfo("Finished initial pf update")
 
         self.pf_lock.release()
+        rospy.loginfo("Released initial lock")
 
 
     # weight_function
@@ -160,7 +162,7 @@ class UWBParticleFilter:
         #     if(one != two):
         #         delta = one - two
         #         print("BROKEN {}".format(delta))
-
+        rospy.loginfo("Sucessfully completed weight function")
         return particle_weights
 
     def calc_uwb_particle_weight(self, hyp_observed, real_observed):
@@ -234,14 +236,8 @@ class UWBParticleFilter:
                 # here we have an ad-hoc weighting scheme for combining beam probs
                 # works well, though...
                 p += pz*pz*pz
-
+        
         return p
-
-
-
-
-
-
 
     # observation_function
     # Accepts the state of all the particles and returns the predicted observation for each one
@@ -266,7 +262,7 @@ class UWBParticleFilter:
             expected_observations[i][-1] = self.imu_observation_function(particle_states[i])
 
         #print("Loop time: {}".format(time.clock()-start))
-
+        rospy.loginfo("Successfully completed observation function")
         return expected_observations
 
     # uwb_observation_function
@@ -311,7 +307,7 @@ class UWBParticleFilter:
         # Get current cmd_vel
         try:
             cmd_vel = rospy.wait_for_message("/cmd_vel", Twist, timeout = 0.1)
-        except:
+        except: # If nobody is publishing, set the commands to zero
             cmd_vel = Twist()
             cmd_vel.angular.z = 0
             cmd_vel.linear.x = 0
@@ -361,6 +357,8 @@ class UWBParticleFilter:
             # if(i == 0):
             #     print("delta_x: {} \t delta_y: {} \t delta_theta: {}".format(delta_x_robot, delta_y_robot, delta_theta))
 
+        rospy.loginfo("Succesfully completed dynamics function")
+
         # Return updated particles
         return particle_states
 
@@ -370,18 +368,24 @@ class UWBParticleFilter:
     # Supports masked numpy array for partial observations
     def update(self, observation):
         self.pf_lock.acquire()
+        print(observation.mask)
         self.pf.update(observation)
         self.pf_lock.release()
 
     def get_particle_states(self):
+
         self.pf_lock.acquire()
-        return self.pf.original_particles
+        particle_states = self.pf.original_particles
         self.pf_lock.release()
+        return particle_states
+        
 
     def get_state(self):
         self.pf_lock.acquire()
-        return self.pf.mean_state
+        mean_state = self.pf.mean_state
         self.pf_lock.release()
+        return mean_state
+        
 
 # create_uwb_sensor_update_function
 # Factory function that generates an observation function for each of the UWB anchors
@@ -423,6 +427,7 @@ def create_imu_sensor_update_function(sensor_vector_pos):
         global sensor_measurements, sensor_measurements_mask
 
         # Write the distance observation to the correct index associated with the tag and anchor
+        
         _, _, sensor_measurements[-1] = tf_conversions.transformations.euler_from_quaternion([message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w])
 
         # Mask all elements except the one for the measurement we collected
@@ -507,6 +512,8 @@ if __name__ == "__main__":
     # List of all anchor names that will be placed in the environment
     anchor_names = ["9205", "C518", "9AAB", "D81B", "998D", "D499", "9BAC", "1C31", "91BA"]
 
+    rospy.loginfo("Waiting for initial scan from lidar to get sensor resolution...")
+
     # Get the number of lidar scans and range
     initial_scan = rospy.wait_for_message('/scan_filtered', LaserScan)
 
@@ -518,6 +525,8 @@ if __name__ == "__main__":
         "range_max" : initial_scan.range_max,
         "transform" : np.array([0, .145])
     }
+
+    rospy.loginfo("Scan received!")
 
     # Total number of sensors - used to construct the sensor measurement array
     # Each tag receives a range measurement from each anchor, creating num_tags*num_anchors measurements
@@ -623,17 +632,29 @@ if __name__ == "__main__":
 
     seq = 0
 
+    #Update initial estimate of pose
+    estimated_pose = pf.get_state()
+
     while not rospy.is_shutdown():
-        start = time.clock()
+        #start = time.clock()
         pf.update(np.ma.masked_array(sensor_measurements, mask = sensor_measurements_mask))
+        print(sensor_measurements_mask)
 
         sensor_measurements_mask = np.ones(shape = (num_sensors))
+        
 
         # Retrieve particle states
         particles = pf.get_particle_states()
+        prev_estimated_pose = estimated_pose
         estimated_pose = pf.get_state()
+        #TODO: Identify root cause of NaN values in particle filter
+        # Don't update state if NaN value exists
+        if(np.any(np.isnan(estimated_pose))):
+            estimated_pose = prev_estimated_pose
 
-        # Create message for outputting particle states
+
+
+        # Create message for outputting particle states to rostopic
         pose_array = PoseArray()
 
         # Instantiate a list to store all of the poses in the pose message
@@ -693,10 +714,12 @@ if __name__ == "__main__":
 
         try:
             # First we need to get the estimate of the robot pose from the odometry data
-            (trans_base_odom, rot_base_odom) = transform_listener.lookupTransform('/odom', '/base_link', rospy.Time(0))
+            (trans_base_odom, rot_base_odom) = transform_listener.lookupTransform('/odom', '/base_footprint', rospy.Time(0))
 
             # Extract rotation from quaternion
             (roll_base_odom, pitch_base_odom, yaw_base_odom) = tf_conversions.transformations.euler_from_quaternion(rot_base_odom)
+
+            
 
             # theta_odom_map is the error between the particle filter estimated orientation vs the odometry estimated orientation
             # Once again assumes 2D robot - robot does not fly or roll
@@ -710,6 +733,7 @@ if __name__ == "__main__":
 
 
             # Finally, we convert back to quaternion
+            print(theta_odom_map)
             q = tf_conversions.transformations.quaternion_from_euler(0, 0, theta_odom_map)
 
             # Publish transform

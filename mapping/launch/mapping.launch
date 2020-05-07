@@ -20,7 +20,7 @@ firing up the octomap server to generate 2D/3D occupancy maps
   <arg name="map_topic" default="/map" />
 
   <!-- Base frame of the robot -->
-  <arg name="robot_base_frame" default="/base_link" />
+  <arg name="robot_base_frame" default="/base_footprint" />
 
   <!-- Launch node to publish point cloud generated from ARKit as a rostopic -->
   <node pkg="point_cloud_io" type="read" name="pointcloud_publisher">
